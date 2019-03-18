@@ -1,0 +1,23 @@
+<RCC>
+    <qresource prefix="/">
+        <file>data/icon_palette.png</file>
+        <file>data/icon_palette_add.png</file>
+        <file>data/icon_palette_remove.png</file>
+        <file>data/icon_pencil.png</file>
+        <file>data/icon_zoom_in.png</file>
+        <file>data/icon_zoom_off.png</file>
+        <file>data/icon_zoom_out.png</file>
+        <file>data/icon_erase.png</file>
+        <file>data/icon_move.png</file>
+        <file>data/icon_pipette.png</file>
+        <file>data/icon_pixel_1x1.png</file>
+        <file>data/icon_pixel_2x2.png</file>
+        <file>data/icon_pixel_4x4.png</file>
+        <file>data/icon_pixel_8x8.png</file>
+        <file>data/icon_sprite.png</file>
+        <file>data/icon_layer_delete.png</file>
+        <file>data/icon_layer_down.png</file>
+        <file>data/icon_layer_up.png</file>
+        <file>data/icon_brush.png</file>
+    </qresource>
+</RCC>
