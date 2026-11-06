@@ -1,0 +1,9 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {"name":"windows","generator":"Visual Studio 17 2022","architecture":"x64","binaryDir":"${sourceDir}/build","cacheVariables":{"BUILD_TESTING":"ON"}},
+    {"name":"headless","generator":"Visual Studio 17 2022","architecture":"x64","binaryDir":"${sourceDir}/build-headless","cacheVariables":{"TZJ_BUILD_EDITOR":"OFF","BUILD_TESTING":"ON"}}
+  ],
+  "buildPresets": [{"name":"windows","configurePreset":"windows","configuration":"Release"}],
+  "testPresets": [{"name":"windows","configurePreset":"windows","configuration":"Release","output":{"outputOnFailure":true}}]
+}

@@ -1,0 +1,38 @@
+name: build
+on: [push, pull_request]
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux graphics dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xorg-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install emulator
+        run: npm ci --prefix tests/emulator --ignore-scripts
+      - name: Boot exported ROMs
+        run: node tests/rom_emulator.mjs tests/emulator/node_modules/jsnes/src/index.js build/test-output
+      - name: Editor smoke test on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./build/tilezeitjobb --demo --smoke-test --screenshot build/editor.png
+      - name: Editor smoke test on Windows
+        if: runner.os == 'Windows'
+        run: ./build/Release/tilezeitjobb.exe --demo --smoke-test --screenshot build/editor.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tilezeitjobb-${{ matrix.os }}
+          path: |
+            build/editor.png
+            build/test-output/*.nes
