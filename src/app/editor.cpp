@@ -253,6 +253,7 @@ void Editor::dock_layout() {
     ImGui::DockBuilderFinish(dock);
 }
 void Editor::choose_workspace(Workspace workspace) {
+    shape_drag_ = false;
     workspace_ = workspace;
     fit_countdown_ = 1;
     if (workspace == Workspace::Tiles) {
@@ -352,6 +353,8 @@ void Editor::menus() {
             ImGui::Separator();
             ImGui::TextUnformatted("P pencil  E eraser  F fill  A attributes  I picker");
             ImGui::TextUnformatted("S sprite  M move  R select  V stamp  T tile  H pan");
+            ImGui::TextUnformatted("L line  B rectangle  O ellipse");
+            ImGui::TextUnformatted("Shift constrains shapes; Esc cancels the preview.");
             ImGui::TextUnformatted("1..4 color slot  [ / ] brush size");
             ImGui::TextUnformatted("Middle drag pans; mouse wheel zooms.");
             ImGui::TextUnformatted("ROM export uses the current frame and initial viewport.");
@@ -377,11 +380,13 @@ void Editor::menus() {
         if (ImGui::IsKeyPressed(ImGuiKey_E))
             file_dialog(FileAction::Export);
         if (ImGui::IsKeyPressed(ImGuiKey_Z) && history_.undo(project)) {
+            shape_drag_ = false;
             frame_ = std::min(frame_, project.frames.size() - 1);
             layer_ = -1;
             changed();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Y) && history_.redo(project)) {
+            shape_drag_ = false;
             frame_ = std::min(frame_, project.frames.size() - 1);
             layer_ = -1;
             changed();
@@ -396,6 +401,9 @@ void Editor::menus() {
     }
     for (auto [key, t] : {std::pair{ImGuiKey_P, Tool::Pencil},
                           {ImGuiKey_E, Tool::Eraser},
+                          {ImGuiKey_L, Tool::Line},
+                          {ImGuiKey_B, Tool::Rectangle},
+                          {ImGuiKey_O, Tool::Ellipse},
                           {ImGuiKey_F, Tool::Fill},
                           {ImGuiKey_A, Tool::Palette},
                           {ImGuiKey_I, Tool::Picker},
@@ -410,8 +418,10 @@ void Editor::menus() {
                 workspace_ = Workspace::Tiles;
             else if (t == Tool::Sprite || t == Tool::Move)
                 workspace_ = Workspace::Sprites;
-            else if (t != Tool::Pan)
+            else if (t != Tool::Pan && workspace_ != Workspace::Sprites &&
+                     workspace_ != Workspace::Animate)
                 workspace_ = Workspace::Draw;
+            shape_drag_ = false;
             tool_ = t;
         }
     for (int i = 0; i < 4; ++i)
@@ -429,6 +439,9 @@ void Editor::tools(bool embedded) {
     int column = 0;
     for (auto [name, t] : {std::pair{"Pencil  P", Tool::Pencil},
                            {"Eraser  E", Tool::Eraser},
+                           {"Line  L", Tool::Line},
+                           {"Rectangle B", Tool::Rectangle},
+                           {"Ellipse  O", Tool::Ellipse},
                            {"Fill  F", Tool::Fill},
                            {"Set colors A", Tool::Palette},
                            {"Pick color  I", Tool::Picker},
@@ -439,11 +452,13 @@ void Editor::tools(bool embedded) {
                            {"Paint tile  T", Tool::TileBrush},
                            {"Pan  H", Tool::Pan}}) {
         bool relevant = t == Tool::Pan || t == Tool::Picker;
+        if (workspace_ != Workspace::Tiles)
+            relevant |= t == Tool::Line || t == Tool::Rectangle || t == Tool::Ellipse;
         if (workspace_ == Workspace::Tiles)
             relevant |= t == Tool::TileBrush || t == Tool::Palette;
         else if (workspace_ == Workspace::Sprites)
-            relevant |=
-                t == Tool::Sprite || t == Tool::Move || t == Tool::Pencil || t == Tool::Eraser;
+            relevant |= t == Tool::Sprite || t == Tool::Move || t == Tool::Pencil ||
+                        t == Tool::Eraser || t == Tool::Fill;
         else
             relevant |= t == Tool::Pencil || t == Tool::Eraser || t == Tool::Fill ||
                         t == Tool::Select || t == Tool::Stamp;
@@ -456,6 +471,7 @@ void Editor::tools(bool embedded) {
         if (column % 2)
             width /= 2;
         if (ImGui::Selectable(name, tool_ == t, 0, {width, 28})) {
+            shape_drag_ = false;
             tool_ = t;
             if (t == Tool::TileBrush || t == Tool::Stamp || t == Tool::Palette) {
                 layer_ = -1;
@@ -463,7 +479,7 @@ void Editor::tools(bool embedded) {
             }
         }
     }
-    if (tool_ == Tool::Pencil || tool_ == Tool::Eraser) {
+    if (tool_ == Tool::Pencil || tool_ == Tool::Eraser || shape_tool()) {
         ImGui::Spacing();
         ImGui::TextUnformatted("Brush size");
         for (int size : {1, 2, 4, 8}) {
@@ -474,6 +490,18 @@ void Editor::tools(bool embedded) {
             if (ImGui::Selectable(label, brush_ == size, 0, {45, 25}))
                 brush_ = size;
         }
+    }
+    if (shape_tool()) {
+        if (tool_ != Tool::Line)
+            ImGui::Checkbox("Filled shape", &shape_filled_);
+        ImGui::TextWrapped("Drag to preview; release to draw. Shift constrains; Esc cancels.");
+    }
+    if (workspace_ != Workspace::Tiles) {
+        ImGui::SeparatorText("Symmetry");
+        ImGui::Checkbox("Mirror left / right", &mirror_x_);
+        ImGui::Checkbox("Mirror top / bottom", &mirror_y_);
+        ImGui::TextDisabled(layer_ >= 0 ? "Around sprite center" : "Around canvas center");
+        ImGui::TextDisabled("Pencil / eraser / shapes");
     }
     if (ImGui::CollapsingHeader("Canvas options", embedded ? 0 : ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::Checkbox("Show sprites", &show_sprites_))
@@ -756,26 +784,55 @@ void Editor::apply_tool(int x, int y, bool first, bool right) {
     }
     if (tool_ == Tool::Fill) {
         if (first) {
-            flood_fill(project, frame_, x, y, paint, right ? -1 : palette_);
+            if (layer_ >= 0) {
+                const auto &s = f.sprites.at(layer_);
+                flood_fill_sprite(project, frame_, layer_, x - s.x, y - s.y, Byte(paint));
+            } else
+                flood_fill(project, frame_, x, y, paint, right ? -1 : palette_);
             changed();
         }
         return;
     }
-    if (layer_ >= 0) {
-        auto &s = f.sprites.at(layer_);
-        for (int dy = 0; dy < brush_; ++dy)
-            for (int dx = 0; dx < brush_; ++dx) {
-                int px = x - s.x + dx, py = y - s.y + dy;
-                if (px >= 0 && px < 8 && py >= 0 && py < 8)
-                    s.pixels[(s.flip_y ? 7 - py : py) * 8 + (s.flip_x ? 7 - px : px)] =
-                        tool_ == Tool::Eraser ? 0 : paint;
-            }
-        changed();
-        return;
+    paint_stroke(stroke_pixels(first ? x : last_x_, first ? y : last_y_, x, y, false), right);
+}
+bool Editor::shape_tool() const {
+    return tool_ == Tool::Line || tool_ == Tool::Rectangle || tool_ == Tool::Ellipse;
+}
+std::vector<PixelPoint> Editor::stroke_pixels(int x0, int y0, int x1, int y1,
+                                              bool constrain) const {
+    DrawingShape shape = tool_ == Tool::Rectangle ? DrawingShape::Rectangle
+                         : tool_ == Tool::Ellipse ? DrawingShape::Ellipse
+                                                  : DrawingShape::Line;
+    if (constrain) {
+        int dx = x1 - x0, dy = y1 - y0;
+        if (shape == DrawingShape::Line && std::abs(dx) > 2 * std::abs(dy))
+            y1 = y0;
+        else if (shape == DrawingShape::Line && std::abs(dy) > 2 * std::abs(dx))
+            x1 = x0;
+        else {
+            int side = std::max(std::abs(dx), std::abs(dy));
+            x1 = x0 + (dx < 0 ? -side : side);
+            y1 = y0 + (dy < 0 ? -side : side);
+        }
     }
-    paint_line(project, frame_, first ? x : last_x_, first ? y : last_y_, x, y,
-               tool_ == Tool::Eraser ? 0 : paint, brush_,
-               tool_ == Tool::Eraser || right ? -1 : palette_);
+    int width = project.width, height = project.height;
+    if (layer_ >= 0) {
+        const auto &sprite = project.frames[frame_].sprites.at(layer_);
+        x0 -= sprite.x;
+        x1 -= sprite.x;
+        y0 -= sprite.y;
+        y1 -= sprite.y;
+        width = height = 8;
+    }
+    return drawing_pixels(shape, x0, y0, x1, y1, width, height,
+                          shape != DrawingShape::Line && shape_filled_, brush_, mirror_x_,
+                          mirror_y_);
+}
+void Editor::paint_stroke(const std::vector<PixelPoint> &points, bool right) {
+    if (points.empty())
+        return;
+    bool erase = right || tool_ == Tool::Eraser;
+    paint_pixels(project, frame_, points, Byte(erase ? 0 : slot_), erase ? -1 : palette_, layer_);
     changed();
 }
 void Editor::canvas() {
@@ -864,7 +921,7 @@ void Editor::canvas() {
                       IM_COL32(255, 208, 93, 255), 0, 0, 2);
     }
     auto &io = ImGui::GetIO();
-    if (hover && io.MouseWheel != 0)
+    if (hover && !shape_drag_ && io.MouseWheel != 0)
         zoom_ = std::clamp(zoom_ + (io.MouseWheel > 0 ? .5f : -.5f), .5f, 12.f);
     if (hover) {
         int x = std::clamp(int((io.MousePos.x - origin.x) / zoom_), 0, project.width - 1),
@@ -893,12 +950,18 @@ void Editor::canvas() {
                 stroke_ = true;
                 start_x_ = last_x_ = x;
                 start_y_ = last_y_ = y;
-                if (tool_ != Tool::Picker && tool_ != Tool::Select && tool_ != Tool::Pan &&
+                if (shape_tool()) {
+                    shape_drag_ = true;
+                    shape_right_ = ImGui::IsMouseClicked(1);
+                }
+                if (!shape_tool() && tool_ != Tool::Picker && tool_ != Tool::Select &&
+                    tool_ != Tool::Pan &&
                     !(tool_ == Tool::TileBrush && (io.KeyAlt || ImGui::IsMouseDown(1))))
                     checkpoint();
             }
             if (stroke_ && (ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1))) {
-                apply_tool(x, y, first, ImGui::IsMouseDown(1));
+                if (!shape_tool())
+                    apply_tool(x, y, first, ImGui::IsMouseDown(1));
                 last_x_ = x;
                 last_y_ = y;
             }
@@ -906,6 +969,68 @@ void Editor::canvas() {
         ImGui::SetTooltip(
             "%d, %d | Tile %d,%d | Palette %d", x, y, x / 8, y / 8,
             project.frames[frame_].attributes[(y / 16) * project.block_width() + x / 16]);
+    }
+    if (shape_drag_ && (!shape_tool() || ImGui::IsKeyPressed(ImGuiKey_Escape) || playing_)) {
+        shape_drag_ = false;
+        stroke_ = false;
+    }
+    if (shape_drag_) {
+        // Keep the gesture captured when the pointer leaves the image.
+        int x = int(std::floor((io.MousePos.x - origin.x) / zoom_));
+        int y = int(std::floor((io.MousePos.y - origin.y) / zoom_));
+        auto points = stroke_pixels(start_x_, start_y_, x, y, io.KeyShift);
+        int ox = 0, oy = 0;
+        const Sprite *sprite = nullptr;
+        if (layer_ >= 0) {
+            sprite = &project.frames[frame_].sprites.at(layer_);
+            ox = sprite->x;
+            oy = sprite->y;
+        }
+        Byte slot = Byte(shape_right_ ? 0 : slot_);
+        for (auto [px, py] : points) {
+            int wx = px + ox, wy = py + oy;
+            if (wx < 0 || wy < 0 || wx >= project.width || wy >= project.height)
+                continue;
+            Byte index =
+                sprite ? project.sprite_palettes[sprite->palette][slot]
+                       : project.background[shape_right_
+                                                ? project.frames[frame_].attributes
+                                                      [(wy / 16) * project.block_width() + wx / 16]
+                                                : palette_][slot];
+            if (sprite && slot == 0) {
+                const auto &f = project.frames[frame_];
+                index =
+                    project.background[f.attributes[(wy / 16) * project.block_width() + wx / 16]]
+                                      [f.pixels[wy * project.width + wx]];
+            }
+            draw->AddRectFilled({origin.x + wx * zoom_, origin.y + wy * zoom_},
+                                {origin.x + (wx + 1) * zoom_, origin.y + (wy + 1) * zoom_},
+                                ImGui::ColorConvertFloat4ToU32(color(index)));
+        }
+        if (ImGui::IsMouseReleased(shape_right_ ? 1 : 0)) {
+            if (!points.empty()) {
+                checkpoint();
+                paint_stroke(points, shape_right_);
+            }
+            shape_drag_ = false;
+        }
+    }
+    if (mirror_x_ || mirror_y_) {
+        float ox = 0, oy = 0, w = float(project.width), h = float(project.height);
+        if (layer_ >= 0) {
+            const auto &s = project.frames[frame_].sprites.at(layer_);
+            ox = float(s.x);
+            oy = float(s.y);
+            w = h = 8;
+        }
+        if (mirror_x_)
+            draw->AddLine({origin.x + (ox + w / 2) * zoom_, origin.y + oy * zoom_},
+                          {origin.x + (ox + w / 2) * zoom_, origin.y + (oy + h) * zoom_},
+                          IM_COL32(100, 220, 255, 150));
+        if (mirror_y_)
+            draw->AddLine({origin.x + ox * zoom_, origin.y + (oy + h / 2) * zoom_},
+                          {origin.x + (ox + w) * zoom_, origin.y + (oy + h / 2) * zoom_},
+                          IM_COL32(100, 220, 255, 150));
     }
     if (!ImGui::IsMouseDown(0) && !ImGui::IsMouseDown(1))
         stroke_ = false;

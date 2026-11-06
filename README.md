@@ -13,7 +13,9 @@ the same image model and exporter.
 
 The screenshots come straight from the editor's built-in demo. No external artwork is required.
 
-- indexed drawing: pencil, fill, eraser, color picking, selections and captured brushes
+- indexed drawing: pencil, fill, eraser, lines, outlined/filled rectangles and ellipses, color picking,
+  selections and captured brushes
+- live shape previews, constrained lines/squares/circles, and mirrored drawing on the canvas or selected sprite
 - linked 8x8 tiles: paint maps, inspect pattern usage and edit matching tiles together
 - four background and four sprite color sets, palette copying and appearance-preserving slot swaps
 - sprite objects with per-object colors, position, visibility, flipping and background priority
@@ -47,7 +49,10 @@ hardware reports, the original palette-test animation and separate preview panel
 | Input | Action |
 |---|---|
 | left drag | draw or use the active tool |
-| right drag with Pencil | paint the background color |
+| right drag with Pencil or a shape tool | paint the background color / erase sprite pixels |
+| L / B / O | line / rectangle / ellipse |
+| Shift while dragging a shape | horizontal, vertical or 45-degree line; square or circle |
+| Esc while dragging a shape | cancel its preview |
 | middle drag / wheel | pan / zoom |
 | P / E / F / I | pencil / erase / fill / pick color |
 | R / Ctrl+C / V | select / capture the selection / paint with the captured brush |
@@ -182,6 +187,7 @@ which the original Qt application cannot read. Loading alone does not modify the
 | Suite | Coverage |
 |---|---|
 | Core | CHR bitplanes, deduplication, attribute packing and screen boundaries, OAM, ROM headers/vectors, file roundtrips, legacy import and hardware-limit rejection |
+| Drawing tools | shape rasterization, clipping, filled/outlined ellipses, symmetry, sprite flips, paint masks and undo |
 | Editing workflows | linked tile updates, tile painting, brush rotation and wrapping, palette remapping, selected-color drawing/fill and undo |
 | Emulator integration | five exported scenes booted for 120 frames in pinned JSNES 2.1.0; rendered pixels and all nametable bytes compared with the project data |
 
@@ -211,7 +217,7 @@ The desktop smoke test also renders real editor screenshots, for example on Wind
 
 ## Not yet
 
-- symmetry, pixel-perfect stroke cleanup and a larger set of drawing primitives
+- pixel-perfect stroke cleanup, polygons, curves and gradient drawing
 - animated ROM playback, sprite-sheet animation export and richer animation editing
 - metasprites, 8x16 sprites and a persistent library of unplaced tiles
 - banked mappers and physical hardware verification

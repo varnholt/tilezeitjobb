@@ -24,6 +24,12 @@ const char *Editor::tool_label() const {
         return "Pencil";
     case Tool::Eraser:
         return "Eraser";
+    case Tool::Line:
+        return "Line";
+    case Tool::Rectangle:
+        return "Rectangle";
+    case Tool::Ellipse:
+        return "Ellipse";
     case Tool::Fill:
         return "Fill";
     case Tool::Palette:
@@ -76,8 +82,12 @@ void Editor::selection_inspector() {
     ImGui::TextUnformatted(tool_label());
     if (guidance_) {
         const char *help =
-            tool_ == Tool::Select ? "Drag on the canvas to select pixels. Capture the selection to "
-                                    "rotate, flip or paint with it."
+            shape_tool()
+                ? "Drag to preview a shape; release to draw. Shift locks lines to 45-degree "
+                  "steps or makes squares/circles. Esc cancels. Right-drag erases."
+            : tool_ == Tool::Select
+                ? "Drag on the canvas to select pixels. Capture the selection to "
+                  "rotate, flip or paint with it."
             : tool_ == Tool::Stamp
                 ? "Paint on the canvas with your captured brush. Its options are below."
             : tool_ == Tool::Fill ? "Click a region to fill it with the selected paint color."

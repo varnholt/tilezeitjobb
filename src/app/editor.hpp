@@ -38,6 +38,9 @@ class Editor {
     enum class Tool {
         Pencil,
         Eraser,
+        Line,
+        Rectangle,
+        Ellipse,
         Fill,
         Palette,
         Picker,
@@ -54,6 +57,10 @@ class Editor {
     int layer_{-1}, palette_{}, slot_{1}, brush_{1}, grid_{8}, tile_x_{}, tile_y_{};
     int start_x_{}, start_y_{}, last_x_{}, last_y_{};
     Tool tool_{Tool::Pencil};
+    bool shape_filled_{}, mirror_x_{}, mirror_y_{}, shape_drag_{}, shape_right_{};
+    std::vector<PixelPoint> stroke_pixels(int x0, int y0, int x1, int y1, bool constrain) const;
+    bool shape_tool() const;
+    void paint_stroke(const std::vector<PixelPoint> &, bool right);
     bool dirty_{}, refresh_{true}, quit_{}, stroke_{}, playing_{}, show_sprites_{true},
         hardware_preview_{}, onion_{}, highlight_{}, reference_overlay_{}, pal_test_{};
     bool layout_built_{}, focus_workflows_{true};

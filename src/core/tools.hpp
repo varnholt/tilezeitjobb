@@ -20,6 +20,19 @@ struct IndexedBrush {
     std::vector<Byte> pixels;
     bool operator==(const IndexedBrush &) const = default;
 };
+enum class DrawingShape { Line, Rectangle, Ellipse };
+struct PixelPoint {
+    int x{}, y{};
+    bool operator==(const PixelPoint &) const = default;
+};
+// Returns clipped, unique pixels, shared by the live preview and the committed stroke.
+std::vector<PixelPoint> drawing_pixels(DrawingShape, int x0, int y0, int x1, int y1, int width,
+                                       int height, bool filled = false, int size = 1,
+                                       bool mirror_x = false, bool mirror_y = false);
+void flood_fill_sprite(Project &, std::size_t frame, std::size_t sprite, int x, int y, Byte color);
+// Sprite points use displayed coordinates; flips are applied when writing storage.
+void paint_pixels(Project &, std::size_t frame, const std::vector<PixelPoint> &, Byte color,
+                  int palette = -1, int sprite = -1);
 enum class BrushTransform { FlipX, FlipY, RotateCW, RotateCCW };
 IndexedBrush capture_brush(const Project &, std::size_t frame, int x, int y, int width, int height);
 IndexedBrush transform_brush(const IndexedBrush &, BrushTransform);

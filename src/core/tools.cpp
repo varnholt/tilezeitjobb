@@ -1,5 +1,6 @@
 #include "core/tools.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <map>
 #include <stdexcept>
@@ -23,6 +24,161 @@ void ensure_mask(Frame &frame) {
         frame.paint_mask.assign(frame.pixels.size(), 255);
 }
 } // namespace
+std::vector<PixelPoint> drawing_pixels(DrawingShape shape, int x0, int y0, int x1, int y1,
+                                       int width, int height, bool filled, int size, bool mirror_x,
+                                       bool mirror_y) {
+    if (width < 1 || height < 1 || width > 512 || height > 512 || size < 1 || size > 32)
+        throw std::runtime_error("Invalid drawing dimensions");
+    // Endpoints may lie outside the target (e.g. dragging beyond a selected sprite).
+    x0 = std::clamp(x0, -1024, 1024);
+    x1 = std::clamp(x1, -1024, 1024);
+    y0 = std::clamp(y0, -1024, 1024);
+    y1 = std::clamp(y1, -1024, 1024);
+    std::vector<Byte> mask(static_cast<std::size_t>(width) * height);
+    auto dot = [&](int x, int y) {
+        for (int dy = 0; dy < size; ++dy)
+            for (int dx = 0; dx < size; ++dx) {
+                int px = x + dx, py = y + dy;
+                if (px < 0 || py < 0 || px >= width || py >= height)
+                    continue;
+                mask[py * width + px] = 1;
+                if (mirror_x)
+                    mask[py * width + width - 1 - px] = 1;
+                if (mirror_y)
+                    mask[(height - 1 - py) * width + px] = 1;
+                if (mirror_x && mirror_y)
+                    mask[(height - 1 - py) * width + width - 1 - px] = 1;
+            }
+    };
+    auto line = [&](int ax, int ay, int bx, int by) {
+        int dx = std::abs(bx - ax), sx = ax < bx ? 1 : -1;
+        int dy = -std::abs(by - ay), sy = ay < by ? 1 : -1, error = dx + dy;
+        for (;;) {
+            dot(ax, ay);
+            if (ax == bx && ay == by)
+                break;
+            int twice = 2 * error;
+            if (twice >= dy) {
+                error += dy;
+                ax += sx;
+            }
+            if (twice <= dx) {
+                error += dx;
+                ay += sy;
+            }
+        }
+    };
+    if (shape == DrawingShape::Line)
+        line(x0, y0, x1, y1);
+    else {
+        int left = std::min(x0, x1), right = std::max(x0, x1);
+        int top = std::min(y0, y1), bottom = std::max(y0, y1);
+        if (shape == DrawingShape::Rectangle) {
+            if (filled) {
+                for (int y = top; y <= bottom; ++y)
+                    line(left, y, right, y);
+            } else {
+                line(left, top, right, top);
+                line(left, bottom, right, bottom);
+                line(left, top, left, bottom);
+                line(right, top, right, bottom);
+            }
+        } else if (left == right || top == bottom)
+            line(left, top, right, bottom);
+        else {
+            // Integer midpoint ellipse, including its tips for narrow bounding boxes.
+            long long a = right - left, b = bottom - top, odd = b & 1;
+            long long dx = 4 * (1 - a) * b * b, dy = 4 * (odd + 1) * a * a;
+            long long error = dx + dy + odd * a * a;
+            int low = top + static_cast<int>((b + 1) / 2), high = low - static_cast<int>(odd);
+            const long long aa = 8 * a * a, bb = 8 * b * b;
+            auto row = [&](int l, int r, int y) {
+                if (filled)
+                    line(l, y, r, y);
+                else {
+                    dot(l, y);
+                    dot(r, y);
+                }
+            };
+            do {
+                row(left, right, low);
+                row(left, right, high);
+                long long twice = 2 * error;
+                if (twice <= dy) {
+                    ++low;
+                    --high;
+                    error += dy += aa;
+                }
+                if (twice >= dx || 2 * error > dy) {
+                    ++left;
+                    --right;
+                    error += dx += bb;
+                }
+            } while (left <= right);
+            while (low - high < b) {
+                row(left - 1, right + 1, low++);
+                row(left - 1, right + 1, high--);
+            }
+        }
+    }
+    std::vector<PixelPoint> result;
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            if (mask[y * width + x])
+                result.push_back({x, y});
+    return result;
+}
+void flood_fill_sprite(Project &p, std::size_t frame, std::size_t sprite, int x, int y,
+                       Byte color) {
+    if (color > 3)
+        throw std::runtime_error("Invalid NES drawing color");
+    auto &s = p.frames.at(frame).sprites.at(sprite);
+    if (x < 0 || x >= 8 || y < 0 || y >= 8)
+        return;
+    if (s.flip_x)
+        x = 7 - x;
+    if (s.flip_y)
+        y = 7 - y;
+    Byte old = s.pixels[y * 8 + x];
+    if (old == color)
+        return;
+    std::vector<PixelPoint> pending{{x, y}};
+    s.pixels[y * 8 + x] = color;
+    for (std::size_t i = 0; i < pending.size(); ++i) {
+        auto point = pending[i];
+        for (auto [dx, dy] : {PixelPoint{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+            int px = point.x + dx, py = point.y + dy;
+            if (px < 0 || py < 0 || px >= 8 || py >= 8 || s.pixels[py * 8 + px] != old)
+                continue;
+            s.pixels[py * 8 + px] = color;
+            pending.push_back({px, py});
+        }
+    }
+}
+void paint_pixels(Project &p, std::size_t frame, const std::vector<PixelPoint> &points, Byte color,
+                  int palette, int sprite) {
+    if (color > 3 || palette < -1 || palette > 3 || sprite < -1)
+        throw std::runtime_error("Invalid NES drawing color or layer");
+    auto &f = p.frames.at(frame);
+    if (sprite >= 0) {
+        auto &s = f.sprites.at(sprite);
+        for (auto [x, y] : points) {
+            if (x < 0 || x >= 8 || y < 0 || y >= 8)
+                continue;
+            s.pixels[(s.flip_y ? 7 - y : y) * 8 + (s.flip_x ? 7 - x : x)] = color;
+        }
+    } else {
+        ensure_mask(f);
+        for (auto [x, y] : points) {
+            if (x < 0 || x >= p.width || y < 0 || y >= p.height)
+                continue;
+            f.pixels[y * p.width + x] = color;
+            f.paint_mask[y * p.width + x] = color;
+            if (palette >= 0)
+                f.attributes[(y / 16) * p.block_width() + x / 16] = Byte(palette);
+        }
+    }
+}
 Tile read_tile(const Project &project, std::size_t frame, int tx, int ty) {
     if (tx < 0 || ty < 0 || tx >= project.width / 8 || ty >= project.height / 8)
         throw std::runtime_error("Tile coordinates outside the map");
