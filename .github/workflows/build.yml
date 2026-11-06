@@ -27,6 +27,13 @@ jobs:
       - name: Editor smoke test on Linux
         if: runner.os == 'Linux'
         run: xvfb-run -a ./build/tilezeitjobb --demo --smoke-test --screenshot build/editor.png
+      - name: Software OpenGL on Windows
+        if: runner.os == 'Windows'
+        uses: ssciwr/setup-mesa-dist-win@v3
+        with:
+          version: '26.0.3'
+          build-type: release-msvc
+          deployment-choice: '1'
       - name: Editor smoke test on Windows
         if: runner.os == 'Windows'
         run: ./build/Release/tilezeitjobb.exe --demo --smoke-test --screenshot build/editor.png
