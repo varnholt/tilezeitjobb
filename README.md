@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/varnholt/tilezeitjobb/actions/workflows/build.yml/badge.svg)](https://github.com/varnholt/tilezeitjobb/actions/workflows/build.yml)
 
-A pixel and tile editor for the NES, written in C++20. Draw with hardware color sets, edit repeated tiles in place,
+A pixel and tile editor for the NES, written in C++23. Draw with hardware color sets, edit repeated tiles in place,
 arrange sprites and compile the picture directly into a runnable NES ROM. The editor and command-line tools share
 the same image model and exporter.
 
@@ -13,7 +13,7 @@ the same image model and exporter.
 | ![pixel drawing workspace](docs/images/editor.png) | ![linked tile editing workspace](docs/images/tiles.png) |
 | tools and paint colors beside the canvas | edit a tile once and update its matching map instances |
 
-The screenshots come straight from the editor's built-in demo. No external artwork is required.
+The screenshots show STARFALL, the original space-shooter example included with the editor. Its 208 background patterns and 14 sprite objects compile directly into a valid NES ROM; cockpit glow, engine flame, laser and wingman remain separate editable sprites.
 
 - indexed drawing: pencil, fill, eraser, lines, connected lines, outlined/filled polygons, rectangles and ellipses, color picking,
   selections and captured brushes
@@ -44,14 +44,14 @@ tilezeitjobb --demo --fullscreen
 
 The editor starts maximized. F11 switches between fullscreen and the previous window state.
 
-The action bar contains New, Open, Save, Import and Export NES. Its Editing selector chooses the working mode:
+The action bar contains New, Open, Save, Import and Export NES. The numbered workflow follows a scene from scenery to a runnable ROM:
 
 | Mode | Workspace |
 |---|---|
-| Draw pixels | painting tools and color sets on the left; selection and brush properties on the right |
-| Build tile maps | tile painting tools on the left; pattern catalog and linked tile editor on the right |
-| Place sprites | sprite placement tools, object properties and the source sprite sheet |
-| Animate | drawing workspace with the frame timeline below the canvas |
+| 1. Background | draw or import scenery; use Edit background tiles for repeated patterns |
+| 2. Sprites | place characters, effects and highlights over the existing background |
+| 3. Animate | duplicate frames and preview timed animation |
+| 4. Export | check hardware limits and compile the current frame into a NES ROM |
 
 Click a color swatch to choose paint; right-click it to edit the NES color. The active tool and paint color are also
 shown above the canvas. View > Advanced layout exposes the dockable workspace, including attribute inspection,
@@ -95,6 +95,10 @@ receiving region supplies their colors. Captured brushes are temporary; save the
 Palette operations can swap nonzero slots while remapping background pixels, sprite patterns and paint overrides
 across all frames, preserving the rendered artwork. Slot zero remains the universal backdrop or sprite transparency.
 Remapping one color set may split previously shared patterns; the catalog and export limits update accordingly.
+
+Color-set management lives in **Edit color sets...**, beside the paint swatches. It opens a dedicated
+editor for hardware colors, set copying and indexed slot swaps. Hover controls and technical readouts
+for explanations, including disabled options.
 
 ## NES export
 
@@ -153,7 +157,7 @@ Frame numbers are zero based. Run `tilezeitjobb-cli --help` for the command summ
 
 ## Browser editor
 
-[Open the web editor](https://varnholt.github.io/tilezeitjobb/). The browser version runs the same C++20
+[Open the web editor](https://varnholt.github.io/tilezeitjobb/). The browser version runs the same C++23
 editor and NES compiler through WebAssembly and WebGL 2. Use a mouse and keyboard.
 
 Open and Import use your browser's file picker. Save downloads a `.tzj` project. Export NES downloads
@@ -175,7 +179,7 @@ directly from the filesystem does not work.
 
 ## Build
 
-Requirements: CMake 3.24+, Git, a C++20 compiler and an OpenGL 3.3 driver. The first configuration downloads pinned
+Requirements: CMake 3.24+, Git, a C++23 compiler and an OpenGL 3.3 driver. The first configuration downloads pinned
 Dear ImGui, GLFW, nlohmann/json and stb sources. The command-line tools and tests do not require a graphics context.
 
 Windows, with Visual Studio 2022 and Desktop development with C++:
@@ -253,6 +257,8 @@ The desktop smoke test also renders real editor screenshots, for example on Wind
 
 ## Not yet
 
+- integrated emulator playback of the compiled ROM (the canvas is currently a direct artwork preview)
+
 - pixel-perfect stroke cleanup, curves and gradient drawing
 - animated ROM playback, sprite-sheet animation export and richer animation editing
 - metasprites, 8x16 sprites and a persistent library of unplaced tiles
@@ -261,10 +267,10 @@ The desktop smoke test also renders real editor screenshots, for example on Wind
 ## Background
 
 The project began as a Qt-based NES paint tool. The current editor uses Dear ImGui, GLFW and OpenGL, with a separate
-C++20 core shared by the GUI, command-line tools and tests. The [original editor screenshot](tilezeitjobb.png) remains
+C++23 core shared by the GUI, command-line tools and tests. The [original editor screenshot](tilezeitjobb.png) remains
 in the repository.
 
 ## License
 
-GPL-3.0, see [LICENSE](LICENSE). Dear ImGui and GLFW retain their upstream licenses; nlohmann/json is MIT and stb is
+MIT, see [LICENSE](LICENSE). Dear ImGui and GLFW retain their upstream licenses; nlohmann/json is MIT and stb is
 public-domain/MIT. JSNES is an optional Apache-2.0 test dependency. Installed packages include the runtime dependency licenses.

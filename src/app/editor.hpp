@@ -132,6 +132,9 @@ class Editor {
     void menus();
     void tools(bool embedded = false);
     void palettes(bool embedded = false);
+    void palette_editor();
+    bool palette_editor_open_{};
+    int palette_edit_group_{}, palette_edit_index_{};
     void canvas();
     void layers(bool embedded = false);
     void preview();

@@ -608,63 +608,213 @@ Project load_project(const std::filesystem::path &path) {
 }
 Project demo_project() {
     Project p;
-    p.background = {{{15, 1, 17, 48}, {15, 9, 25, 41}, {15, 7, 23, 39}, {15, 1, 33, 49}}};
-    auto &frame = p.frames[0];
-    for (int y = 0; y < p.height; ++y)
-        for (int x = 0; x < p.width; ++x) {
-            int palette = y >= 208 ? 3 : y >= 176 ? 2 : y >= 160 ? 1 : 0;
-            Byte pixel = 1;
-            if (y < 160) {
-                int mountain = 140 - (64 - std::abs(x % 128 - 64)) / 2;
-                if (y >= mountain)
-                    pixel = y < mountain + 3 ? 3 : 2;
-                if (y < 96 && x % 40 == 12 && y % 32 == 12)
-                    pixel = 3;
-                int mx = x - 211, my = y - 39;
-                if (mx * mx + my * my < 196 && (mx + 7) * (mx + 7) + (my - 4) * (my - 4) > 169)
-                    pixel = 3;
-            } else if (y < 176)
-                pixel = y < 166 ? 3 : static_cast<Byte>(x % 8 < 2 ? 2 : 1);
-            else if (y < 208)
-                pixel = static_cast<Byte>(y % 8 == 0 || (x + (y / 8 % 2) * 8) % 16 == 0 ? 1 : 2);
-            else
-                pixel = static_cast<Byte>(y % 8 < 2 && x % 16 < 9                    ? 2
-                                          : y % 16 == 3 && x % 32 > 5 && x % 32 < 10 ? 3
-                                                                                     : 1);
-            if (x >= 80 && x < 144 && y >= 96 && y < 160) {
-                palette = 2;
-                pixel = static_cast<Byte>(y % 8 == 0 || (x + (y / 8 % 2) * 8) % 16 == 0 ? 1 : 2);
-                if (y < 104 && (x / 8) % 2 == 0)
-                    pixel = 0;
-                if (x % 16 >= 5 && x % 16 <= 10 && y % 24 >= 4 && y % 24 <= 12)
-                    pixel = 0;
-                if (x % 16 >= 5 && x % 16 <= 10 && y % 24 == 3)
-                    pixel = 3;
-                if (x >= 108 && x < 120 && y >= 140)
-                    pixel = 0;
+    p.background = {{{15, 1, 33, 48}, {15, 1, 17, 48}, {15, 2, 18, 34}, {15, 12, 28, 48}}};
+    p.sprite_palettes = {{{15, 17, 44, 48}, {15, 6, 22, 39}, {15, 11, 27, 48}, {15, 5, 21, 48}}};
+    auto &f = p.frames[0];
+    auto pixel = [&](int x, int y, int c, int palette = -1) {
+        if (x < 0 || y < 0 || x >= 256 || y >= 240)
+            return;
+        f.pixels[y * 256 + x] = Byte(c);
+        if (palette >= 0)
+            f.attributes[(y / 16) * 16 + x / 16] = Byte(palette);
+    };
+    auto rect = [&](int x, int y, int w, int h, int c, int palette = -1) {
+        for (int py = y; py < y + h; ++py)
+            for (int px = x; px < x + w; ++px)
+                pixel(px, py, c, palette);
+    };
+    // Repeated star tiles keep the scene comfortably inside one CHR pattern bank.
+    for (int ty = 0; ty < 30; ++ty)
+        for (int tx = 0; tx < 32; ++tx) {
+            unsigned seed = unsigned(tx * 37 + ty * 71);
+            if (seed % 7 == 0)
+                pixel(tx * 8 + 3, ty * 8 + 4, seed % 3 == 0 ? 3 : 2);
+            if (seed % 41 == 0) {
+                pixel(tx * 8 + 2, ty * 8 + 4, 1);
+                pixel(tx * 8 + 4, ty * 8 + 4, 1);
+                pixel(tx * 8 + 3, ty * 8 + 3, 1);
+                pixel(tx * 8 + 3, ty * 8 + 5, 1);
             }
-            frame.attributes[(y / 16) * p.block_width() + x / 16] = static_cast<Byte>(palette);
-            frame.pixels[y * p.width + x] = pixel;
         }
-    Sprite explorer;
-    explorer.name = "Explorer";
-    explorer.x = 48;
-    explorer.y = 152;
-    const char *rows[] = {"00222200", "00222200", "00022000", "01111110",
-                          "00111100", "00111100", "00100100", "03300330"};
-    p.sprite_sheet = {8, 8, std::vector<Byte>(8 * 8 * 4)};
-    for (int y = 0; y < 8; ++y)
-        for (int x = 0; x < 8; ++x) {
-            Byte slot = static_cast<Byte>(rows[y][x] - '0');
-            explorer.pixels[y * 8 + x] = slot;
-            auto c = nes_colors[p.sprite_palettes[0][slot]];
-            auto i = (y * 8 + x) * 4;
-            p.sprite_sheet.rgba[i] = c.r;
-            p.sprite_sheet.rgba[i + 1] = c.g;
-            p.sprite_sheet.rgba[i + 2] = c.b;
-            p.sprite_sheet.rgba[i + 3] = slot ? 255 : 0;
+    rect(0, 24, 256, 64, 0);
+    rect(8, 96, 80, 64, 0);
+    rect(80, 112, 144, 48, 0);
+    rect(64, 176, 128, 48, 0);
+    // A ringed blue planet, with hard pixel shading and sparse ordered transitions.
+    for (int y = 96; y < 160; ++y)
+        for (int x = 16; x < 80; ++x) {
+            int dx = x - 46, dy = y - 128;
+            if (dx * dx + dy * dy < 26 * 26) {
+                int tone = dx + dy / 2 < -5 ? 3 : dx + dy / 2 < 13 ? 2 : 1;
+                if ((x + y) % 4 == 0 && tone > 1)
+                    --tone;
+                pixel(x, y, tone, 2);
+            }
+            int ring = std::abs((x - 46) * (x - 46) +
+                                8 * (y - 132 + (x - 46) / 3) * (y - 132 + (x - 46) / 3) - 32 * 32);
+            if (ring < 110 && (y > 128 || dx * dx + dy * dy >= 26 * 26))
+                pixel(x, y, 3, 2);
         }
-    frame.sprites.push_back(std::move(explorer));
+    // A 5x7 pixel alphabet, reused by the title and small interface lettering.
+    const std::pair<char, std::array<unsigned, 7>> font[]{
+        {'A', {14, 17, 17, 31, 17, 17, 17}}, {'B', {30, 17, 17, 30, 17, 17, 30}},
+        {'C', {15, 16, 16, 16, 16, 16, 15}}, {'D', {30, 17, 17, 17, 17, 17, 30}},
+        {'E', {31, 16, 16, 30, 16, 16, 31}}, {'F', {31, 16, 16, 30, 16, 16, 16}},
+        {'G', {15, 16, 16, 23, 17, 17, 15}}, {'H', {17, 17, 17, 31, 17, 17, 17}},
+        {'I', {31, 4, 4, 4, 4, 4, 31}},      {'J', {7, 2, 2, 2, 18, 18, 12}},
+        {'K', {17, 18, 20, 24, 20, 18, 17}}, {'L', {16, 16, 16, 16, 16, 16, 31}},
+        {'M', {17, 27, 21, 21, 17, 17, 17}}, {'N', {17, 25, 21, 19, 17, 17, 17}},
+        {'O', {14, 17, 17, 17, 17, 17, 14}}, {'P', {30, 17, 17, 30, 16, 16, 16}},
+        {'Q', {14, 17, 17, 17, 21, 18, 13}}, {'R', {30, 17, 17, 30, 20, 18, 17}},
+        {'S', {15, 16, 16, 14, 1, 1, 30}},   {'T', {31, 4, 4, 4, 4, 4, 4}},
+        {'U', {17, 17, 17, 17, 17, 17, 14}}, {'V', {17, 17, 17, 17, 17, 10, 4}},
+        {'W', {17, 17, 17, 21, 21, 21, 10}}, {'X', {17, 17, 10, 4, 10, 17, 17}},
+        {'Y', {17, 17, 10, 4, 4, 4, 4}},     {'Z', {31, 1, 2, 4, 8, 16, 31}},
+        {'1', {4, 12, 4, 4, 4, 4, 14}},      {'2', {14, 17, 1, 2, 4, 8, 31}}};
+    auto text = [&](std::string_view word, int x, int y, int scale, int c, bool italic = false) {
+        for (char ch : word) {
+            for (const auto &[letter, rows] : font)
+                if (letter == ch)
+                    for (int row = 0; row < 7; ++row)
+                        for (int col = 0; col < 5; ++col)
+                            if (rows[row] & (1u << (4 - col)))
+                                rect(x + col * scale + (italic ? (6 - row) * scale / 3 : 0),
+                                     y + row * scale, scale, scale,
+                                     c < 0 ? (row < 2   ? 3
+                                              : row < 5 ? 2
+                                                        : 3)
+                                           : c);
+            x += 6 * scale;
+        }
+    };
+    text("STARFALL", 15, 33, 4, 1, true);
+    text("STARFALL", 13, 29, 4, -1, true);
+    rect(20, 62, 216, 1, 2);
+    rect(32, 64, 192, 1, 1);
+    text("NOVA SQUADRON", 89, 74, 1, 2);
+    // The main ship is background artwork; bright cockpit, hull and exhaust colors
+    // are independent sprite overlays that can be moved and inspected in the editor.
+    const std::array<std::pair<int, int>, 16> hull{{{88, 136},
+                                                    {102, 128},
+                                                    {119, 128},
+                                                    {133, 117},
+                                                    {157, 117},
+                                                    {174, 127},
+                                                    {196, 131},
+                                                    {211, 136},
+                                                    {195, 141},
+                                                    {168, 141},
+                                                    {151, 152},
+                                                    {130, 152},
+                                                    {124, 143},
+                                                    {100, 143},
+                                                    {96, 140},
+                                                    {88, 140}}};
+    for (int y = 112; y < 160; ++y)
+        for (int x = 80; x < 224; ++x) {
+            bool inside = false;
+            for (std::size_t i = 0, j = hull.size() - 1; i < hull.size(); j = i++) {
+                const auto [ax, ay] = hull[i];
+                const auto [bx, by] = hull[j];
+                if ((ay > y) != (by > y) && x < (bx - ax) * double(y - ay) / (by - ay) + ax)
+                    inside = !inside;
+            }
+            if (inside) {
+                int shade = y < 126 ? 3 : y < 135 ? 2 : 1;
+                if (y == 135 || y == 140)
+                    shade = 3;
+                pixel(x, y, shade, 1);
+            }
+        }
+    rect(135, 119, 20, 2, 1, 1);
+    rect(137, 121, 21, 3, 2, 1);
+    rect(106, 131, 20, 2, 1, 1);
+    rect(109, 133, 15, 1, 3, 1);
+    for (int x = 130; x < 163; x += 4)
+        rect(x, 142, 2, 5, 2, 1);
+    rect(167, 132, 24, 2, 3, 1);
+    rect(177, 137, 21, 1, 2, 1);
+    rect(95, 134, 7, 7, 1, 1);
+    rect(96, 136, 6, 2, 3, 1);
+    // Lower title-screen furniture stays in a separate, teal background color set.
+    for (int y = 176; y < 224; ++y)
+        for (int x = 64; x < 192; ++x)
+            f.attributes[(y / 16) * 16 + x / 16] = 3;
+    rect(72, 185, 112, 1, 2);
+    rect(72, 207, 112, 1, 1);
+    text("PRESS START", 95, 192, 1, 3);
+    text("1 PLAYER", 78, 214, 1, 2);
+    text("2 PLAYERS", 137, 214, 1, 1);
+    auto sprite = [&](std::string name, int x, int y, int palette,
+                      const std::array<std::string_view, 8> &rows) {
+        Sprite s;
+        s.name = std::move(name);
+        s.x = x;
+        s.y = y;
+        s.palette = palette;
+        s.tile_x = int(f.sprites.size());
+        for (int py = 0; py < 8; ++py)
+            for (int px = 0; px < 8; ++px)
+                s.pixels[py * 8 + px] = Byte(rows[py][px] - '0');
+        f.sprites.push_back(std::move(s));
+    };
+    sprite("Cockpit cyan glow", 140, 121, 0,
+           {"00000000", "00022222", "00233333", "02333322", "22222111", "00000000", "00000000",
+            "00000000"});
+    sprite("Cockpit glass", 148, 121, 0,
+           {"00000000", "22200000", "33322000", "22233220", "11122222", "00000000", "00000000",
+            "00000000"});
+    sprite("Hull rim light", 164, 128, 0,
+           {"00000000", "00000000", "22222222", "33333333", "11111111", "00000000", "00000000",
+            "00000000"});
+    sprite("Hull rim extension", 172, 128, 0,
+           {"00000000", "00000000", "22222222", "33333333", "11111111", "00000000", "00000000",
+            "00000000"});
+    sprite("Exhaust outer flame", 64, 133, 1,
+           {"00000000", "00000000", "00000001", "00001112", "00112223", "00001112", "00000001",
+            "00000000"});
+    sprite("Exhaust middle flame", 72, 133, 1,
+           {"00000000", "00001111", "11112222", "22223333", "33333333", "22223333", "11112222",
+            "00001111"});
+    sprite("Exhaust hot core", 80, 133, 1,
+           {"00000000", "11111111", "22222222", "33333333", "33333333", "33333333", "22222222",
+            "11111111"});
+    sprite("Forward laser", 216, 132, 0,
+           {"00000000", "00000000", "00000000", "22222222", "33333333", "22222222", "00000000",
+            "00000000"});
+    sprite("Laser point", 224, 132, 0,
+           {"00000000", "00000000", "00000000", "22200000", "33333000", "22200000", "00000000",
+            "00000000"});
+    sprite("Navigation beacon", 194, 129, 1,
+           {"00000000", "00000000", "00020000", "00232000", "00020000", "00000000", "00000000",
+            "00000000"});
+    // A smaller green fighter shows a character-sized 16x16 metasprite (four objects).
+    const std::array<std::string_view, 16> fighter{
+        {"0000000000000000", "0000000220000000", "0000002332000000", "0000002332000000",
+         "0000022332200000", "0000222332220000", "0002222332222000", "0022222332222200",
+         "0222222332222220", "2221222332221222", "0001222332221000", "0001222332221000",
+         "0000222332220000", "0000011331100000", "0000011001100000", "0000000000000000"}};
+    for (int ty = 0; ty < 2; ++ty)
+        for (int tx = 0; tx < 2; ++tx) {
+            std::array<std::string_view, 8> rows;
+            for (int y = 0; y < 8; ++y)
+                rows[y] = fighter[ty * 8 + y].substr(tx * 8, 8);
+            sprite("Wingman " + std::to_string(ty * 2 + tx + 1), 37 + tx * 8, 175 + ty * 8, 2,
+                   rows);
+        }
+    p.sprite_sheet = {int(f.sprites.size()) * 8, 8,
+                      std::vector<Byte>(f.sprites.size() * 8 * 8 * 4)};
+    for (std::size_t i = 0; i < f.sprites.size(); ++i)
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                auto slot = f.sprites[i].pixels[y * 8 + x];
+                auto c = nes_colors[p.sprite_palettes[f.sprites[i].palette][slot]];
+                auto out = (y * p.sprite_sheet.width + int(i) * 8 + x) * 4;
+                p.sprite_sheet.rgba[out] = c.r;
+                p.sprite_sheet.rgba[out + 1] = c.g;
+                p.sprite_sheet.rgba[out + 2] = c.b;
+                p.sprite_sheet.rgba[out + 3] = slot ? 255 : 0;
+            }
     return p;
 }
 

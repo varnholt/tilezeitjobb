@@ -1,4 +1,5 @@
 #include "app/editor.hpp"
+#include "app/ui_help.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <imgui.h>
@@ -37,24 +38,24 @@ void Editor::brush_controls(bool embedded) {
     if (clipboard_.empty())
         ImGui::TextWrapped("Select a rectangle with R, then capture it with Ctrl+C. Paste with V.");
     else {
-        ImGui::Text("Captured brush: %d x %d", clip_width_, clip_height_);
-        if (ImGui::Button("Rotate left"))
+        ui::Text("Captured brush: %d x %d", clip_width_, clip_height_);
+        if (ui::Button("Rotate left"))
             transform_captured_brush(BrushTransform::RotateCCW);
         ImGui::SameLine();
-        if (ImGui::Button("Rotate right"))
+        if (ui::Button("Rotate right"))
             transform_captured_brush(BrushTransform::RotateCW);
-        if (ImGui::Button("Flip horizontal"))
+        if (ui::Button("Flip horizontal"))
             transform_captured_brush(BrushTransform::FlipX);
         ImGui::SameLine();
-        if (ImGui::Button("Flip vertical"))
+        if (ui::Button("Flip vertical"))
             transform_captured_brush(BrushTransform::FlipY);
-        if (ImGui::Button("Paint with brush")) {
+        if (ui::Button("Paint with brush")) {
             tool_ = Tool::Stamp;
             layer_ = -1;
         }
-        ImGui::Checkbox("Slot zero is transparent", &brush_transparent_);
-        ImGui::Checkbox("Snap stamps to 8x8 grid", &brush_snap_);
-        ImGui::Checkbox("Wrap across canvas edges", &brush_wrap_);
+        ui::Checkbox("Slot zero is transparent", &brush_transparent_);
+        ui::Checkbox("Snap stamps to 8x8 grid", &brush_snap_);
+        ui::Checkbox("Wrap across canvas edges", &brush_wrap_);
         ImGui::TextWrapped("Brush pixels use the destination region's NES palette. Transformations "
                            "keep exact indexed pixels.");
         // A bounded preview samples large captured regions without drawing hundreds of thousands of
@@ -80,14 +81,14 @@ void Editor::brush_controls(bool embedded) {
     }
     if (selection_.width > 0) {
         ImGui::Separator();
-        ImGui::Text("Selection: %d x %d", selection_.width, selection_.height);
-        if (ImGui::Button("Capture"))
+        ui::Text("Selection: %d x %d", selection_.width, selection_.height);
+        if (ui::Button("Capture"))
             copy_selection();
         ImGui::SameLine();
-        if (ImGui::Button("Cut"))
+        if (ui::Button("Cut"))
             copy_selection(true);
         ImGui::SameLine();
-        if (ImGui::Button("Deselect"))
+        if (ui::Button("Deselect"))
             selection_ = {};
     }
     if (!embedded)
@@ -115,7 +116,7 @@ void Editor::tiles(bool embedded) {
             ImGui::End();
         return;
     }
-    ImGui::Text("Background CHR: %zu / 256 patterns", tile_catalog_.size());
+    ui::Text("Background CHR: %zu / 256 patterns", tile_catalog_.size());
     ImGui::TextWrapped("Pick a tile; paint with T. Right-click the map to pick an existing tile.");
     ImGui::BeginChild("tile-catalog", {0, 155}, true);
     int columns = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / 40));
@@ -132,7 +133,7 @@ void Editor::tiles(bool embedded) {
                     ImGui::SameLine();
                 ImGui::PushID(static_cast<int>(index));
                 auto pos = ImGui::GetCursorScreenPos();
-                ImGui::InvisibleButton("tile", {32, 44});
+                ui::InvisibleButton("tile", {32, 44});
                 auto &entry = tile_catalog_[index];
                 if (ImGui::IsItemClicked()) {
                     selected_tile_ = entry.pixels;
@@ -157,11 +158,11 @@ void Editor::tiles(bool embedded) {
             }
     ImGui::EndChild();
     if (tile_selected_) {
-        ImGui::Checkbox("Edit all identical map tiles", &edit_linked_tiles_);
+        ui::Checkbox("Edit all identical map tiles", &edit_linked_tiles_);
         ImGui::TextWrapped(
             "Linked edits affect the current frame. Each 16x16 region keeps its own palette.");
         auto origin = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("edit-tile", {160, 160});
+        ui::InvisibleButton("edit-tile", {160, 160});
         auto *draw = ImGui::GetWindowDrawList();
         draw_tile(draw, origin, 20, selected_tile_, project.background[palette_]);
         for (int i = 0; i <= 8; ++i) {
@@ -185,12 +186,12 @@ void Editor::tiles(bool embedded) {
         }
         if (!ImGui::IsMouseDown(0) && !ImGui::IsMouseDown(1))
             tile_edit_stroke_ = false;
-        if (ImGui::Button("Paint tile (T)")) {
+        if (ui::Button("Paint tile (T)")) {
             tool_ = Tool::TileBrush;
             layer_ = -1;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Rotate tile")) {
+        if (ui::Button("Rotate tile")) {
             checkpoint();
             auto b = transform_brush({8, 8, {selected_tile_.begin(), selected_tile_.end()}},
                                      BrushTransform::RotateCW);
