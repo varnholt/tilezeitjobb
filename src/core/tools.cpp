@@ -128,6 +128,63 @@ std::vector<PixelPoint> drawing_pixels(DrawingShape shape, int x0, int y0, int x
                 result.push_back({x, y});
     return result;
 }
+std::vector<PixelPoint> path_pixels(const std::vector<PixelPoint> &vertices, int width, int height,
+                                    bool closed, bool filled, int size, bool mirror_x,
+                                    bool mirror_y) {
+    if (vertices.size() > 256)
+        throw std::runtime_error("A path supports at most 256 points");
+    // Validate dimensions even for an empty path.
+    auto result = drawing_pixels(DrawingShape::Line, -1024, -1024, -1024, -1024, width, height,
+                                 false, size, mirror_x, mirror_y);
+    std::vector<Byte> mask(static_cast<std::size_t>(width) * height);
+    auto segment = [&](PixelPoint a, PixelPoint b) {
+        for (auto [x, y] : drawing_pixels(DrawingShape::Line, a.x, a.y, b.x, b.y, width, height,
+                                          false, size, mirror_x, mirror_y))
+            mask[y * width + x] = 1;
+    };
+    for (std::size_t i = 0; i < vertices.size(); ++i) {
+        if (i)
+            segment(vertices[i - 1], vertices[i]);
+        else
+            segment(vertices[0], vertices[0]);
+    }
+    if (closed && vertices.size() > 2) {
+        segment(vertices.back(), vertices.front());
+        if (filled) {
+            for (int y = 0; y < height; ++y) {
+                std::vector<double> crossings;
+                const double scan = y + .5;
+                for (std::size_t i = 0; i < vertices.size(); ++i) {
+                    auto a = vertices[i], b = vertices[(i + 1) % vertices.size()];
+                    if ((a.y <= scan && b.y > scan) || (b.y <= scan && a.y > scan))
+                        crossings.push_back(a.x + (scan - a.y) * (double(b.x) - a.x) /
+                                                      (double(b.y) - a.y));
+                }
+                std::sort(crossings.begin(), crossings.end());
+                for (std::size_t i = 1; i < crossings.size(); i += 2) {
+                    int left = std::clamp(int(std::ceil(crossings[i - 1])), 0, width - 1);
+                    int right = std::clamp(int(std::floor(crossings[i])), -1, width - 1);
+                    if (crossings[i] < 0 || crossings[i - 1] >= width)
+                        continue;
+                    for (int x = left; x <= right; ++x) {
+                        mask[y * width + x] = 1;
+                        if (mirror_x)
+                            mask[y * width + width - 1 - x] = 1;
+                        if (mirror_y)
+                            mask[(height - 1 - y) * width + x] = 1;
+                        if (mirror_x && mirror_y)
+                            mask[(height - 1 - y) * width + width - 1 - x] = 1;
+                    }
+                }
+            }
+        }
+    }
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            if (mask[y * width + x])
+                result.push_back({x, y});
+    return result;
+}
 void flood_fill_sprite(Project &p, std::size_t frame, std::size_t sprite, int x, int y,
                        Byte color) {
     if (color > 3)

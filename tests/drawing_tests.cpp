@@ -39,6 +39,23 @@ int main() {
         auto mirror = drawing_pixels(DrawingShape::Line, 1, 2, 1, 2, 8, 8, false, 2, true, true);
         check(mirror.size() == 16 && has(mirror, 6, 5) && has(mirror, 5, 4),
               "Thick brush symmetry");
+        auto open = path_pixels({{1, 1}, {6, 1}, {6, 6}}, 8, 8);
+        check(has(open, 6, 3) && !has(open, 3, 3), "Open polyline unexpectedly closed");
+        auto triangle = path_pixels({{1, 1}, {6, 1}, {6, 6}}, 8, 8, true, true);
+        check(has(triangle, 4, 3) && !has(triangle, 1, 6), "Triangle fill");
+        auto concave =
+            path_pixels({{1, 1}, {6, 1}, {6, 3}, {3, 3}, {3, 6}, {1, 6}}, 8, 8, true, true);
+        check(has(concave, 2, 5) && has(concave, 5, 2) && !has(concave, 5, 5),
+              "Concave polygon fill");
+        auto reversed =
+            path_pixels({{1, 6}, {3, 6}, {3, 3}, {6, 3}, {6, 1}, {1, 1}}, 8, 8, true, true);
+        check(concave == reversed, "Polygon winding changed coverage");
+        auto outside = path_pixels({{-4, -4}, {-1, -4}, {-1, -1}}, 8, 8, true, true);
+        check(outside.empty(), "Off-canvas polygon leaked into canvas");
+        auto mirrored = path_pixels({{0, 0}, {2, 0}, {2, 2}}, 8, 8, true, true, 1, true, true);
+        for (auto point : mirrored)
+            check(has(mirrored, 7 - point.x, point.y) && has(mirrored, point.x, 7 - point.y),
+                  "Polygon mirror coverage");
         Project p;
         auto before = p.frames[0].pixels;
         auto attrs = p.frames[0].attributes;

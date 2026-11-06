@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>tilezeitjobb — NES pixel studio</title>
+<meta name="description" content="Draw NES pixel art, edit tiles and sprites, and download runnable NES ROMs in your browser.">
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:#10141a;color:#dce4ea;font:14px system-ui,sans-serif}
+body{display:flex;flex-direction:column}header{display:flex;align-items:center;gap:18px;padding:10px 16px;min-height:48px;border-bottom:1px solid #34444e}
+header strong{letter-spacing:.04em}header span{color:#a5b8c3}a{color:#85d7c4}button{background:#25414a;color:#f1f7fa;border:1px solid #42616b;border-radius:4px;padding:6px 12px;cursor:pointer}
+header a{margin-left:auto}#studio{flex:1;min-height:500px;min-width:1040px;background:#10141a;position:relative}#studio:fullscreen{height:100vh}
+canvas{display:block;width:100%;height:100%;position:absolute;inset:0;outline:none;touch-action:none}#status{position:absolute;inset:0;display:grid;place-content:center;text-align:center;background:#10141a;z-index:2}
+#status[hidden]{display:none}#help{padding:10px 16px;background:#18232c;line-height:1.6}#help[hidden]{display:none}
+</style></head><body>
+<header><strong>tilezeitjobb</strong><span>NES pixel studio</span><button id="fullscreen">Fullscreen</button><button id="help-toggle">Help</button><a href="https://github.com/varnholt/tilezeitjobb" target="_blank" rel="noopener">Source &amp; desktop build</a></header>
+<div id="help" hidden>Use a mouse and keyboard. Open loads a project; Import loads a background image or sprite sheet, depending on the editing mode. Save downloads your project. Export NES downloads a ZIP containing a runnable .nes ROM and its raw assets. Work is also autosaved in this browser. Clear browser data to remove it.</div>
+<main id="studio"><div id="status" role="status">Loading the pixel studio…</div><canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()" aria-label="NES pixel editor"></canvas></main>
+<script>
+var Module = {
+  canvas: document.getElementById('canvas'),
+  onRuntimeInitialized: function(){Module.ready=true;document.getElementById('status').hidden=true;Module.canvas.focus();},
+  setStatus: function(text){if(text)document.getElementById('status').textContent=text;},
+  onAbort: function(){const el=document.getElementById('status');el.hidden=false;el.textContent='The editor could not start. Please use a browser with WebGL 2 enabled, or try the desktop build.';},
+  printErr: function(text){console.error(text);}
+};
+document.getElementById('fullscreen').onclick=()=>Module.toggleFullscreen?.();
+document.getElementById('help-toggle').onclick=()=>{const el=document.getElementById('help');el.hidden=!el.hidden;};
+Module.canvas.addEventListener('dragover',event=>event.preventDefault());
+Module.canvas.addEventListener('drop',event=>{event.preventDefault();const file=event.dataTransfer.files[0];if(file&&Module.importFile)Module.importFile(file,file.name.toLowerCase().endsWith('.tzj')?1:3);});
+</script>
+{{{ SCRIPT }}}
+</body></html>

@@ -14,6 +14,12 @@ class Editor {
     void drop(const std::filesystem::path &);
     void request_close();
     void set_demo();
+    void show_start() { welcome_ = true; }
+    bool starting() const { return welcome_; }
+    bool unsaved() const { return dirty_; }
+#ifdef __EMSCRIPTEN__
+    void browser_file(const std::filesystem::path &, int action);
+#endif
     void start_workspace(std::string_view name);
     bool fullscreen() const { return fullscreen_; }
     void set_fullscreen(bool value) { fullscreen_ = value; }
@@ -35,12 +41,18 @@ class Editor {
     void place_panel(const PanelRect &);
     const char *tool_label() const;
     void new_project();
+    void start_screen();
+    void next_steps();
+    void add_blank_sprite();
+    bool welcome_{true}, focus_sprite_{};
     enum class Tool {
         Pencil,
         Eraser,
         Line,
         Rectangle,
         Ellipse,
+        Polyline,
+        Polygon,
         Fill,
         Palette,
         Picker,
@@ -60,6 +72,15 @@ class Editor {
     bool shape_filled_{}, mirror_x_{}, mirror_y_{}, shape_drag_{}, shape_right_{};
     std::vector<PixelPoint> stroke_pixels(int x0, int y0, int x1, int y1, bool constrain) const;
     bool shape_tool() const;
+    bool path_tool() const;
+    void tool_icon(Tool, float x, float y) const;
+    void cancel_drawing();
+    void finish_path();
+    std::vector<PixelPoint> path_preview(const std::vector<PixelPoint> &) const;
+    std::vector<PixelPoint> path_;
+    Tool path_kind_{Tool::Polyline};
+    std::size_t path_frame_{};
+    int path_layer_{-1};
     void paint_stroke(const std::vector<PixelPoint> &, bool right);
     bool dirty_{}, refresh_{true}, quit_{}, stroke_{}, playing_{}, show_sprites_{true},
         hardware_preview_{}, onion_{}, highlight_{}, reference_overlay_{}, pal_test_{};

@@ -29,6 +29,9 @@ struct PixelPoint {
 std::vector<PixelPoint> drawing_pixels(DrawingShape, int x0, int y0, int x1, int y1, int width,
                                        int height, bool filled = false, int size = 1,
                                        bool mirror_x = false, bool mirror_y = false);
+std::vector<PixelPoint> path_pixels(const std::vector<PixelPoint> &, int width, int height,
+                                    bool closed = false, bool filled = false, int size = 1,
+                                    bool mirror_x = false, bool mirror_y = false);
 void flood_fill_sprite(Project &, std::size_t frame, std::size_t sprite, int x, int y, Byte color);
 // Sprite points use displayed coordinates; flips are applied when writing storage.
 void paint_pixels(Project &, std::size_t frame, const std::vector<PixelPoint> &, Byte color,

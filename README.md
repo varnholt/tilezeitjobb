@@ -6,6 +6,8 @@ A pixel and tile editor for the NES, written in C++20. Draw with hardware color 
 arrange sprites and compile the picture directly into a runnable NES ROM. The editor and command-line tools share
 the same image model and exporter.
 
+**[Open the web editor](https://varnholt.github.io/tilezeitjobb/)** - Runs in your browser; no installation needed.
+
 | | |
 |---|---|
 | ![pixel drawing workspace](docs/images/editor.png) | ![linked tile editing workspace](docs/images/tiles.png) |
@@ -13,7 +15,7 @@ the same image model and exporter.
 
 The screenshots come straight from the editor's built-in demo. No external artwork is required.
 
-- indexed drawing: pencil, fill, eraser, lines, outlined/filled rectangles and ellipses, color picking,
+- indexed drawing: pencil, fill, eraser, lines, connected lines, outlined/filled polygons, rectangles and ellipses, color picking,
   selections and captured brushes
 - live shape previews, constrained lines/squares/circles, and mirrored drawing on the canvas or selected sprite
 - linked 8x8 tiles: paint maps, inspect pattern usage and edit matching tiles together
@@ -22,6 +24,15 @@ The screenshots come straight from the editor's built-in demo. No external artwo
 - frame editing, timed playback and onion skin; brush rotation, flipping, transparency and edge wrapping
 - image import, ordered dithering, automatic palette fitting and source-image watching that preserves background paint
 - direct NROM ROM export, plus CHR, nametables, palettes, OAM and C arrays for use in a game
+
+## First picture
+
+Choose **Draw a background**, **Create a sprite**, or **Import a picture** on the starting screen.
+Pick a paint color on the left, choose Pencil, and draw in the center. The **What next?** panel explains
+the current workflow and NES color limits. **Save** keeps an editable project; **Export NES** produces
+a ROM for an emulator. Use **Help > Start here** to reopen the starting choices.
+
+A new sprite starts blank with three paint colors and transparency. No sprite sheet is required.
 
 ## Use
 
@@ -51,6 +62,9 @@ hardware reports, the original palette-test animation and separate preview panel
 | left drag | draw or use the active tool |
 | right drag with Pencil or a shape tool | paint the background color / erase sprite pixels |
 | L / B / O | line / rectangle / ellipse |
+| K / G | connected lines / polygon |
+| Enter / right-click with a path tool | finish the path as one undo step |
+| Backspace / Esc with a path tool | remove last point / cancel the path |
 | Shift while dragging a shape | horizontal, vertical or 45-degree line; square or circle |
 | Esc while dragging a shape | cancel its preview |
 | middle drag / wheel | pan / zoom |
@@ -137,6 +151,28 @@ Batch conversion processes PNG and BMP files into sequential 4 KiB CHR banks. Cr
 8x8 tiles. A batch palette is exactly four NES color-code bytes; the default is `$0F,$01,$21,$30`.
 Frame numbers are zero based. Run `tilezeitjobb-cli --help` for the command summary.
 
+## Browser editor
+
+[Open the web editor](https://varnholt.github.io/tilezeitjobb/). The browser version runs the same C++20
+editor and NES compiler through WebAssembly and WebGL 2. Use a mouse and keyboard.
+
+Open and Import use your browser's file picker. Save downloads a `.tzj` project. Export NES downloads
+a ZIP containing the runnable `.nes` ROM, CHR, nametable, palette, OAM and C header. Projects are also
+autosaved locally in the browser every ten seconds and restored on your next visit; downloading a project
+keeps a portable copy when browser storage is cleared. Files are processed on your device.
+
+GitHub Actions builds and publishes the web editor on every push to `master`. To build it locally with
+Emscripten 4.0.10 or newer:
+
+```sh
+emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+cmake --build build-web --parallel 2 --target tilezeitjobb
+python -m http.server 8080 --directory build-web
+```
+
+Open `http://localhost:8080`. Serve the HTML, JavaScript, WASM and data files together; opening the HTML
+directly from the filesystem does not work.
+
 ## Build
 
 Requirements: CMake 3.24+, Git, a C++20 compiler and an OpenGL 3.3 driver. The first configuration downloads pinned
@@ -217,7 +253,7 @@ The desktop smoke test also renders real editor screenshots, for example on Wind
 
 ## Not yet
 
-- pixel-perfect stroke cleanup, polygons, curves and gradient drawing
+- pixel-perfect stroke cleanup, curves and gradient drawing
 - animated ROM playback, sprite-sheet animation export and richer animation editing
 - metasprites, 8x16 sprites and a persistent library of unplaced tiles
 - banked mappers and physical hardware verification

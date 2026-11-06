@@ -8,6 +8,12 @@
 #include <imgui_internal.h>
 #include <iostream>
 #include <tuple>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+EM_JS(void, browser_pick, (int action), { Module.pickFile(action); });
+EM_JS(void, browser_download, (const char *path, int bundle),
+      { Module.downloadFile(UTF8ToString(path), !!bundle); });
+#endif
 namespace tzj {
 static void focus_panel(const char *name) {
     if (auto *window = ImGui::FindWindowByName(name)) {
@@ -66,6 +72,8 @@ void Editor::request_close() {
     guard([this] { quit_ = true; });
 }
 void Editor::set_demo() {
+    welcome_ = false;
+    cancel_drawing();
     project = demo_project();
     selected_tile_ = read_tile(project, 0, 0, 0);
     tile_selected_ = true;
@@ -78,6 +86,8 @@ void Editor::set_demo() {
 }
 void Editor::open(const std::filesystem::path &path) {
     auto loaded = load_project(path);
+    welcome_ = false;
+    cancel_drawing();
     project = std::move(loaded);
     project_path_ = path;
     frame_ = 0;
@@ -101,7 +111,32 @@ void Editor::drop(const std::filesystem::path &path) {
         error_ = e.what();
     }
 }
+#ifdef __EMSCRIPTEN__
+void Editor::browser_file(const std::filesystem::path &path, int action) {
+    cancel_drawing();
+    if (action == int(FileAction::Open))
+        guard([this, path] { open(path); });
+    else {
+        file_action_ = static_cast<FileAction>(action);
+        perform_file(path);
+    }
+}
+#endif
 void Editor::file_dialog(FileAction action) {
+#ifdef __EMSCRIPTEN__
+    if (action == FileAction::Open || action == FileAction::Background ||
+        action == FileAction::Sprites) {
+        browser_pick(int(action));
+        return;
+    }
+    file_action_ = action;
+    std::filesystem::path name = action == FileAction::Export ? "scene.nes"
+                                 : action == FileAction::Png  ? "scene.png"
+                                 : project_path_.empty()      ? "untitled.tzj"
+                                                              : project_path_.filename();
+    perform_file(std::filesystem::path("/exports") / name);
+    return;
+#endif
     file_action_ = action;
     file_popup_ = true;
     std::string initial;
@@ -120,6 +155,9 @@ void Editor::save(bool as) {
             return;
         }
         save_project(project_path_, project);
+#ifdef __EMSCRIPTEN__
+        browser_download(path_to_utf8(project_path_).c_str(), 0);
+#endif
         dirty_ = false;
         status_ = "Project saved";
     } catch (const std::exception &e) {
@@ -134,6 +172,9 @@ void Editor::perform_file(const std::filesystem::path &path) {
             break;
         case FileAction::Save:
             save_project(path, project);
+#ifdef __EMSCRIPTEN__
+            browser_download(path_to_utf8(path).c_str(), 0);
+#endif
             project_path_ = path;
             dirty_ = false;
             status_ = "Project saved";
@@ -168,11 +209,17 @@ void Editor::perform_file(const std::filesystem::path &path) {
             if (prefix.extension() == ".nes")
                 prefix.replace_extension();
             export_scene(prefix, project, frame_);
+#ifdef __EMSCRIPTEN__
+            browser_download(path_to_utf8(prefix).c_str(), 1);
+#endif
             status_ = "Exported .nes, .chr, .nam, .pal, .oam and .h";
             break;
         }
         case FileAction::Png:
             save_png(path, project.render(frame_, show_sprites_, hardware_preview_));
+#ifdef __EMSCRIPTEN__
+            browser_download(path_to_utf8(path).c_str(), 0);
+#endif
             status_ = "PNG exported";
             break;
         default:
@@ -253,7 +300,7 @@ void Editor::dock_layout() {
     ImGui::DockBuilderFinish(dock);
 }
 void Editor::choose_workspace(Workspace workspace) {
-    shape_drag_ = false;
+    cancel_drawing();
     workspace_ = workspace;
     fit_countdown_ = 1;
     if (workspace == Workspace::Tiles) {
@@ -281,7 +328,7 @@ void Editor::menus() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New", "Ctrl+N"))
-                guard([this] { new_project(); });
+                guard([this] { show_start(); });
             if (ImGui::MenuItem("Open project...", "Ctrl+O"))
                 guard([this] { file_dialog(FileAction::Open); });
             if (ImGui::MenuItem("Save project", "Ctrl+S"))
@@ -349,11 +396,13 @@ void Editor::menus() {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help")) {
+            if (ImGui::MenuItem("Start here..."))
+                show_start();
             ImGui::TextUnformatted("tilezeitjobb 2.0 - NES pixel and tile studio");
             ImGui::Separator();
             ImGui::TextUnformatted("P pencil  E eraser  F fill  A attributes  I picker");
             ImGui::TextUnformatted("S sprite  M move  R select  V stamp  T tile  H pan");
-            ImGui::TextUnformatted("L line  B rectangle  O ellipse");
+            ImGui::TextUnformatted("L line  B rectangle  O ellipse  K polyline  G polygon");
             ImGui::TextUnformatted("Shift constrains shapes; Esc cancels the preview.");
             ImGui::TextUnformatted("1..4 color slot  [ / ] brush size");
             ImGui::TextUnformatted("Middle drag pans; mouse wheel zooms.");
@@ -372,7 +421,7 @@ void Editor::menus() {
     auto &io = ImGui::GetIO();
     if (io.KeyCtrl) {
         if (ImGui::IsKeyPressed(ImGuiKey_N))
-            guard([this] { new_project(); });
+            guard([this] { show_start(); });
         if (ImGui::IsKeyPressed(ImGuiKey_S))
             save(io.KeyShift);
         if (ImGui::IsKeyPressed(ImGuiKey_O))
@@ -380,13 +429,13 @@ void Editor::menus() {
         if (ImGui::IsKeyPressed(ImGuiKey_E))
             file_dialog(FileAction::Export);
         if (ImGui::IsKeyPressed(ImGuiKey_Z) && history_.undo(project)) {
-            shape_drag_ = false;
+            cancel_drawing();
             frame_ = std::min(frame_, project.frames.size() - 1);
             layer_ = -1;
             changed();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Y) && history_.redo(project)) {
-            shape_drag_ = false;
+            cancel_drawing();
             frame_ = std::min(frame_, project.frames.size() - 1);
             layer_ = -1;
             changed();
@@ -404,6 +453,8 @@ void Editor::menus() {
                           {ImGuiKey_L, Tool::Line},
                           {ImGuiKey_B, Tool::Rectangle},
                           {ImGuiKey_O, Tool::Ellipse},
+                          {ImGuiKey_K, Tool::Polyline},
+                          {ImGuiKey_G, Tool::Polygon},
                           {ImGuiKey_F, Tool::Fill},
                           {ImGuiKey_A, Tool::Palette},
                           {ImGuiKey_I, Tool::Picker},
@@ -421,7 +472,7 @@ void Editor::menus() {
             else if (t != Tool::Pan && workspace_ != Workspace::Sprites &&
                      workspace_ != Workspace::Animate)
                 workspace_ = Workspace::Draw;
-            shape_drag_ = false;
+            cancel_drawing();
             tool_ = t;
         }
     for (int i = 0; i < 4; ++i)
@@ -435,13 +486,15 @@ void Editor::menus() {
 void Editor::tools(bool embedded) {
     if (!embedded)
         ImGui::Begin("Tools");
-    ImGui::SeparatorText("Tools");
+    ImGui::SeparatorText(guidance_ ? "2. Choose a tool" : "Tools");
     int column = 0;
     for (auto [name, t] : {std::pair{"Pencil  P", Tool::Pencil},
                            {"Eraser  E", Tool::Eraser},
                            {"Line  L", Tool::Line},
                            {"Rectangle B", Tool::Rectangle},
                            {"Ellipse  O", Tool::Ellipse},
+                           {"Polyline K", Tool::Polyline},
+                           {"Polygon  G", Tool::Polygon},
                            {"Fill  F", Tool::Fill},
                            {"Set colors A", Tool::Palette},
                            {"Pick color  I", Tool::Picker},
@@ -453,7 +506,8 @@ void Editor::tools(bool embedded) {
                            {"Pan  H", Tool::Pan}}) {
         bool relevant = t == Tool::Pan || t == Tool::Picker;
         if (workspace_ != Workspace::Tiles)
-            relevant |= t == Tool::Line || t == Tool::Rectangle || t == Tool::Ellipse;
+            relevant |= t == Tool::Line || t == Tool::Rectangle || t == Tool::Ellipse ||
+                        t == Tool::Polyline || t == Tool::Polygon;
         if (workspace_ == Workspace::Tiles)
             relevant |= t == Tool::TileBrush || t == Tool::Palette;
         else if (workspace_ == Workspace::Sprites)
@@ -470,8 +524,22 @@ void Editor::tools(bool embedded) {
             (ImGui::GetContentRegionAvail().x - (column % 2 ? ImGui::GetStyle().ItemSpacing.x : 0));
         if (column % 2)
             width /= 2;
-        if (ImGui::Selectable(name, tool_ == t, 0, {width, 28})) {
-            shape_drag_ = false;
+        std::string id = std::string("##tool-") + name;
+        bool selected = ImGui::Selectable(id.c_str(), tool_ == t, 0, {width, 28});
+        auto position = ImGui::GetItemRectMin();
+        tool_icon(t, position.x + 4, position.y + 5);
+        std::string label(name);
+        auto shortcut = label.find_last_of(' ');
+        if (shortcut != std::string::npos)
+            label.resize(shortcut);
+        while (!label.empty() && label.back() == ' ')
+            label.pop_back();
+        ImGui::GetWindowDrawList()->AddText({position.x + 27, position.y + 5},
+                                            ImGui::GetColorU32(ImGuiCol_Text), label.c_str());
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", name);
+        if (selected) {
+            cancel_drawing();
             tool_ = t;
             if (t == Tool::TileBrush || t == Tool::Stamp || t == Tool::Palette) {
                 layer_ = -1;
@@ -479,7 +547,7 @@ void Editor::tools(bool embedded) {
             }
         }
     }
-    if (tool_ == Tool::Pencil || tool_ == Tool::Eraser || shape_tool()) {
+    if (tool_ == Tool::Pencil || tool_ == Tool::Eraser || shape_tool() || path_tool()) {
         ImGui::Spacing();
         ImGui::TextUnformatted("Brush size");
         for (int size : {1, 2, 4, 8}) {
@@ -495,6 +563,19 @@ void Editor::tools(bool embedded) {
         if (tool_ != Tool::Line)
             ImGui::Checkbox("Filled shape", &shape_filled_);
         ImGui::TextWrapped("Drag to preview; release to draw. Shift constrains; Esc cancels.");
+    }
+    if (path_tool()) {
+        if (tool_ == Tool::Polygon)
+            ImGui::Checkbox("Filled polygon", &shape_filled_);
+        ImGui::TextWrapped("Click points. Enter or right-click finishes; Esc cancels.");
+        if (!path_.empty()) {
+            ImGui::Text("%zu points | Backspace removes last", path_.size());
+            if (ImGui::Button("Finish"))
+                finish_path();
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+                cancel_drawing();
+        }
     }
     if (workspace_ != Workspace::Tiles) {
         ImGui::SeparatorText("Symmetry");
@@ -523,7 +604,7 @@ void Editor::tools(bool embedded) {
 void Editor::palettes(bool embedded) {
     if (!embedded)
         ImGui::Begin("Palettes");
-    ImGui::SeparatorText("Paint color");
+    ImGui::SeparatorText(guidance_ ? "1. Choose a paint color" : "Paint color");
     ImGui::TextWrapped("Click a color to paint. Right-click a color to edit it.");
     for (int group = 0; group < 2; ++group) {
         if (!advanced_panels_ && group != (workspace_ == Workspace::Sprites ? 1 : 0))
@@ -531,7 +612,22 @@ void Editor::palettes(bool embedded) {
         ImGui::PushID(group);
         ImGui::TextUnformatted(group ? "Sprites" : "Background");
         auto &palettes = group ? project.sprite_palettes : project.background;
+        if (embedded && guidance_) {
+            const char *sets[]{"Color set 1", "Color set 2", "Color set 3", "Color set 4"};
+            if (ImGui::Combo("##active-color-set", &palette_, sets, 4)) {
+                palette_group_ = group;
+                if (group == 0)
+                    layer_ = -1;
+                else if (layer_ >= 0) {
+                    checkpoint();
+                    project.frames[frame_].sprites.at(layer_).palette = palette_;
+                    changed();
+                }
+            }
+        }
         for (int row = 0; row < 4; ++row) {
+            if (embedded && guidance_ && row != palette_)
+                continue;
             ImGui::PushID(row);
             bool active = palette_ == row && palette_group_ == group;
             char label[24];
@@ -828,6 +924,38 @@ std::vector<PixelPoint> Editor::stroke_pixels(int x0, int y0, int x1, int y1,
                           shape != DrawingShape::Line && shape_filled_, brush_, mirror_x_,
                           mirror_y_);
 }
+bool Editor::path_tool() const {
+    return tool_ == Tool::Polyline || tool_ == Tool::Polygon;
+}
+void Editor::cancel_drawing() {
+    shape_drag_ = false;
+    stroke_ = false;
+    path_.clear();
+}
+std::vector<PixelPoint> Editor::path_preview(const std::vector<PixelPoint> &world) const {
+    auto points = world;
+    int width = project.width, height = project.height;
+    if (layer_ >= 0) {
+        const auto &s = project.frames[frame_].sprites.at(layer_);
+        for (auto &p : points) {
+            p.x -= s.x;
+            p.y -= s.y;
+        }
+        width = height = 8;
+    }
+    return path_pixels(points, width, height, tool_ == Tool::Polygon,
+                       tool_ == Tool::Polygon && shape_filled_, brush_, mirror_x_, mirror_y_);
+}
+void Editor::finish_path() {
+    if (path_.size() >= (tool_ == Tool::Polygon ? 3u : 2u)) {
+        auto pixels = path_preview(path_);
+        if (!pixels.empty()) {
+            checkpoint();
+            paint_stroke(pixels, false);
+        }
+        cancel_drawing();
+    }
+}
 void Editor::paint_stroke(const std::vector<PixelPoint> &points, bool right) {
     if (points.empty())
         return;
@@ -843,7 +971,7 @@ void Editor::canvas() {
                      ? 0
                      : ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking);
-    ImGui::TextUnformatted(tool_label());
+    ImGui::Text("%s | %s", tool_label(), layer_ >= 0 ? "Selected sprite" : "Background");
     ImGui::SameLine();
     auto &colors = palette_group_ ? project.sprite_palettes : project.background;
     ImGui::ColorButton("Current paint", color(colors[palette_][slot_]),
@@ -944,7 +1072,7 @@ void Editor::canvas() {
             (tool_ == Tool::Pan && ImGui::IsMouseDragging(ImGuiMouseButton_Left))) {
             ImGui::SetScrollX(ImGui::GetScrollX() - io.MouseDelta.x);
             ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
-        } else if (!playing_) {
+        } else if (!playing_ && !path_tool()) {
             bool first = ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1);
             if (first) {
                 stroke_ = true;
@@ -970,8 +1098,61 @@ void Editor::canvas() {
             "%d, %d | Tile %d,%d | Palette %d", x, y, x / 8, y / 8,
             project.frames[frame_].attributes[(y / 16) * project.block_width() + x / 16]);
     }
+    if (!path_.empty() && (!path_tool() || path_frame_ != frame_ || path_layer_ != layer_ ||
+                           path_kind_ != tool_ || playing_))
+        cancel_drawing();
+    std::vector<PixelPoint> preview_points;
+    bool preview_right = false;
+    if (path_tool() && !playing_ && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+            cancel_drawing();
+        else {
+            if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !path_.empty())
+                path_.pop_back();
+            PixelPoint point{std::clamp(int(std::floor((io.MousePos.x - origin.x) / zoom_)), 0,
+                                        project.width - 1),
+                             std::clamp(int(std::floor((io.MousePos.y - origin.y) / zoom_)), 0,
+                                        project.height - 1)};
+            if (io.KeyShift && !path_.empty()) {
+                auto last = path_.back();
+                int dx = point.x - last.x, dy = point.y - last.y;
+                if (std::abs(dx) > 2 * std::abs(dy))
+                    point.y = last.y;
+                else if (std::abs(dy) > 2 * std::abs(dx))
+                    point.x = last.x;
+                else {
+                    int n = std::max(std::abs(dx), std::abs(dy));
+                    point = {last.x + (dx < 0 ? -n : n), last.y + (dy < 0 ? -n : n)};
+                }
+            }
+            if (hover && ImGui::IsMouseClicked(0)) {
+                if (tool_ == Tool::Polygon && path_.size() >= 3 && point == path_.front())
+                    finish_path();
+                else if (path_.size() < 256 && (path_.empty() || point != path_.back())) {
+                    if (path_.empty()) {
+                        path_frame_ = frame_;
+                        path_layer_ = layer_;
+                        path_kind_ = tool_;
+                    }
+                    path_.push_back(point);
+                }
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_Enter) || (hover && ImGui::IsMouseClicked(1)))
+                finish_path();
+            if (!path_.empty()) {
+                auto points = path_;
+                if (hover && points.size() < 256 && point != points.back())
+                    points.push_back(point);
+                preview_points = path_preview(points);
+                for (auto p : path_)
+                    draw->AddCircle(
+                        {origin.x + (p.x + .5f) * zoom_, origin.y + (p.y + .5f) * zoom_}, 4,
+                        IM_COL32(255, 210, 95, 255));
+            }
+        }
+    }
     if (shape_drag_ && (!shape_tool() || ImGui::IsKeyPressed(ImGuiKey_Escape) || playing_)) {
-        shape_drag_ = false;
+        cancel_drawing();
         stroke_ = false;
     }
     if (shape_drag_) {
@@ -979,6 +1160,17 @@ void Editor::canvas() {
         int x = int(std::floor((io.MousePos.x - origin.x) / zoom_));
         int y = int(std::floor((io.MousePos.y - origin.y) / zoom_));
         auto points = stroke_pixels(start_x_, start_y_, x, y, io.KeyShift);
+        preview_points = points;
+        preview_right = shape_right_;
+        if (ImGui::IsMouseReleased(shape_right_ ? 1 : 0)) {
+            if (!points.empty()) {
+                checkpoint();
+                paint_stroke(points, shape_right_);
+            }
+            cancel_drawing();
+        }
+    }
+    if (!preview_points.empty()) {
         int ox = 0, oy = 0;
         const Sprite *sprite = nullptr;
         if (layer_ >= 0) {
@@ -986,14 +1178,14 @@ void Editor::canvas() {
             ox = sprite->x;
             oy = sprite->y;
         }
-        Byte slot = Byte(shape_right_ ? 0 : slot_);
-        for (auto [px, py] : points) {
+        Byte slot = Byte(preview_right ? 0 : slot_);
+        for (auto [px, py] : preview_points) {
             int wx = px + ox, wy = py + oy;
             if (wx < 0 || wy < 0 || wx >= project.width || wy >= project.height)
                 continue;
             Byte index =
                 sprite ? project.sprite_palettes[sprite->palette][slot]
-                       : project.background[shape_right_
+                       : project.background[preview_right
                                                 ? project.frames[frame_].attributes
                                                       [(wy / 16) * project.block_width() + wx / 16]
                                                 : palette_][slot];
@@ -1006,13 +1198,6 @@ void Editor::canvas() {
             draw->AddRectFilled({origin.x + wx * zoom_, origin.y + wy * zoom_},
                                 {origin.x + (wx + 1) * zoom_, origin.y + (wy + 1) * zoom_},
                                 ImGui::ColorConvertFloat4ToU32(color(index)));
-        }
-        if (ImGui::IsMouseReleased(shape_right_ ? 1 : 0)) {
-            if (!points.empty()) {
-                checkpoint();
-                paint_stroke(points, shape_right_);
-            }
-            shape_drag_ = false;
         }
     }
     if (mirror_x_ || mirror_y_) {
@@ -1032,6 +1217,13 @@ void Editor::canvas() {
                           {origin.x + (ox + w) * zoom_, origin.y + (oy + h / 2) * zoom_},
                           IM_COL32(100, 220, 255, 150));
     }
+    if (focus_sprite_ && layer_ >= 0) {
+        const auto &s = project.frames[frame_].sprites.at(layer_);
+        auto pos = ImGui::GetWindowPos();
+        ImGui::SetScrollFromPosX(origin.x - pos.x + (s.x + 4) * zoom_, .5f);
+        ImGui::SetScrollFromPosY(origin.y - pos.y + (s.y + 4) * zoom_, .5f);
+        focus_sprite_ = false;
+    }
     if (!ImGui::IsMouseDown(0) && !ImGui::IsMouseDown(1))
         stroke_ = false;
     ImGui::EndChild();
@@ -1041,7 +1233,9 @@ void Editor::layers(bool embedded) {
     if (!embedded)
         ImGui::Begin("Layers & sprites");
     auto &f = project.frames[frame_];
-    if (ImGui::Selectable("Background nametable", layer_ < 0))
+    if (ImGui::Button("+ New sprite", {-1, 28}))
+        add_blank_sprite();
+    if (ImGui::Selectable("Background picture", layer_ < 0))
         layer_ = -1;
     ImGui::Separator();
     ImGui::BeginChild("layer-list", {0, 115}, true);
@@ -1603,6 +1797,7 @@ bool Editor::tick() {
             guided_workspace();
         focus_workflows_ = false;
         popups();
+        start_screen();
     } catch (const std::exception &e) {
         error_ = e.what();
         std::cerr << "Editor: " << e.what() << "\n";
