@@ -31,6 +31,19 @@ with the original palette-test assets. The editor requires an OpenGL 3.3 driver.
 
 ## Editing
 
+The editor starts maximized. **F11** or **View > Fullscreen** switches fullscreen
+on and off; `--fullscreen` starts directly in fullscreen. The previous window size
+and maximized state are restored when leaving fullscreen.
+
+Choose a task above the canvas: **Draw pixels**, **Build with tiles**, **Place
+sprites**, **Animate**, or **Export to NES**. Each task shows its relevant panels
+and a short instruction. **View > Advanced panels** exposes the entire workspace.
+Click a color swatch to choose paint; right-click it to edit the NES color.
+Drawing and filling assign the chosen color set to touched 16x16 background blocks,
+so the painted pixel matches the swatch. Other pixels in that same block share its
+color set, as required by NES hardware.
+
+
 The dockable workspace includes the canvas, tools, background and sprite palettes,
 objects, sprite-sheet picker, preview, attribute grid, hardware report and timeline.
 

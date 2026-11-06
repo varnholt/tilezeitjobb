@@ -14,9 +14,15 @@ class Editor {
     void drop(const std::filesystem::path &);
     void request_close();
     void set_demo();
+    bool fullscreen() const { return fullscreen_; }
+    void set_fullscreen(bool value) { fullscreen_ = value; }
     void set_status(std::string message) { status_ = std::move(message); }
 
   private:
+    enum class Workspace { Draw, Tiles, Sprites, Animate, Export };
+    Workspace workspace_{Workspace::Draw};
+    bool guidance_{true}, advanced_panels_{}, fullscreen_{};
+    void choose_workspace(Workspace);
     enum class Tool {
         Pencil,
         Eraser,

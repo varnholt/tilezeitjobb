@@ -38,19 +38,21 @@ static void glfw_error(int code, const char *message) {
     std::cerr << "GLFW " << code << ": " << message << "\n";
 }
 int main(int argc, char **argv) {
-    bool smoke = false, demo = false;
+    bool smoke = false, demo = false, start_fullscreen = false;
     std::filesystem::path input, screenshot;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--smoke-test")
             smoke = true;
+        else if (arg == "--fullscreen")
+            start_fullscreen = true;
         else if (arg == "--demo")
             demo = true;
         else if (arg == "--screenshot" && i + 1 < argc)
             screenshot = argv[++i];
         else if (arg == "--help") {
-            std::cout
-                << "tilezeitjobb [PROJECT.tzj] [--demo] [--smoke-test] [--screenshot FILE.png]\n";
+            std::cout << "tilezeitjobb [PROJECT.tzj] [--demo] [--fullscreen] [--smoke-test] "
+                         "[--screenshot FILE.png]\n";
             return 0;
         } else
             input = argv[i];
@@ -63,6 +65,8 @@ int main(int argc, char **argv) {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     if (smoke)
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    else
+        glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
     GLFWwindow *window =
         glfwCreateWindow(1440, 960, "tilezeitjobb | NES pixel studio", nullptr, nullptr);
     if (!window) {
@@ -99,6 +103,9 @@ int main(int argc, char **argv) {
     int result = 0;
     try {
         tzj::Editor editor(executable_directory(argv[0]) / "data");
+        editor.set_fullscreen(start_fullscreen);
+        bool fullscreen = false, was_maximized = false;
+        int window_x = 0, window_y = 0, window_width = 1440, window_height = 960;
         glfwSetWindowUserPointer(window, &editor);
         glfwSetDropCallback(window, [](GLFWwindow *w, int count, const char **paths) {
             if (count > 0)
@@ -120,6 +127,43 @@ int main(int argc, char **argv) {
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
+            if (ImGui::IsKeyPressed(ImGuiKey_F11, false))
+                editor.set_fullscreen(!editor.fullscreen());
+            if (!smoke && fullscreen != editor.fullscreen()) {
+                if (editor.fullscreen()) {
+                    glfwGetWindowPos(window, &window_x, &window_y);
+                    glfwGetWindowSize(window, &window_width, &window_height);
+                    was_maximized = glfwGetWindowAttrib(window, GLFW_MAXIMIZED) == GLFW_TRUE;
+                    GLFWmonitor *monitor = glfwGetPrimaryMonitor();
+                    int count = 0;
+                    auto monitors = glfwGetMonitors(&count);
+                    long long largest = -1;
+                    for (int i = 0; i < count; ++i) {
+                        int x, y;
+                        glfwGetMonitorPos(monitors[i], &x, &y);
+                        auto *mode = glfwGetVideoMode(monitors[i]);
+                        long long overlap =
+                            static_cast<long long>(
+                                std::max(0, std::min(window_x + window_width, x + mode->width) -
+                                                std::max(window_x, x))) *
+                            std::max(0, std::min(window_y + window_height, y + mode->height) -
+                                            std::max(window_y, y));
+                        if (overlap > largest) {
+                            largest = overlap;
+                            monitor = monitors[i];
+                        }
+                    }
+                    if (auto *mode = glfwGetVideoMode(monitor))
+                        glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height,
+                                             mode->refreshRate);
+                } else {
+                    glfwSetWindowMonitor(window, nullptr, window_x, window_y, window_width,
+                                         window_height, GLFW_DONT_CARE);
+                    if (was_maximized)
+                        glfwMaximizeWindow(window);
+                }
+                fullscreen = editor.fullscreen();
+            }
             running = editor.tick();
             ImGui::Render();
             int width, height;

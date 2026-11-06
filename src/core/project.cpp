@@ -282,8 +282,9 @@ Image Project::render(std::size_t index, bool sprites, bool hardware_limits) con
     }
     return im;
 }
-void paint_line(Project &p, std::size_t frame, int x0, int y0, int x1, int y1, Byte c, int size) {
-    if (c > 3 || size < 1 || size > 32)
+void paint_line(Project &p, std::size_t frame, int x0, int y0, int x1, int y1, Byte c, int size,
+                int palette) {
+    if (c > 3 || size < 1 || size > 32 || palette < -1 || palette > 3)
         throw std::runtime_error("Invalid brush");
     auto &f = p.frames.at(frame);
     if (f.paint_mask.empty())
@@ -300,6 +301,9 @@ void paint_line(Project &p, std::size_t frame, int x0, int y0, int x1, int y1, B
                 if (xx >= 0 && yy >= 0 && xx < p.width && yy < p.height) {
                     f.pixels[yy * p.width + xx] = c;
                     f.paint_mask[yy * p.width + xx] = c;
+                    if (palette >= 0)
+                        f.attributes[(yy / 16) * p.block_width() + xx / 16] =
+                            static_cast<Byte>(palette);
                 }
         if (x0 == x1 && y0 == y1)
             break;
@@ -314,36 +318,46 @@ void paint_line(Project &p, std::size_t frame, int x0, int y0, int x1, int y1, B
         }
     }
 }
-void flood_fill(Project &p, std::size_t frame, int x, int y, Byte c) {
-    if (x < 0 || y < 0 || x >= p.width || y >= p.height || c > 3)
+void flood_fill(Project &p, std::size_t frame, int x, int y, Byte c, int palette) {
+    if (x < 0 || y < 0 || x >= p.width || y >= p.height || c > 3 || palette < -1 || palette > 3)
         return;
     auto &f = p.frames.at(frame);
-    Byte old = f.pixels[y * p.width + x];
-    if (old == c)
+    Byte old = f.pixels[y * p.width + x],
+         old_palette = f.attributes[(y / 16) * p.block_width() + x / 16];
+    if (old == c && (palette < 0 || palette == old_palette))
         return;
-    if (f.paint_mask.empty())
-        f.paint_mask.assign(f.pixels.size(), 255);
-    Byte pal = f.attributes[(y / 16) * p.block_width() + x / 16];
-    std::queue<std::pair<int, int>> q;
-    q.push({x, y});
-    f.pixels[y * p.width + x] = c;
-    f.paint_mask[y * p.width + x] = c;
-    while (!q.empty()) {
-        auto [cx, cy] = q.front();
-        q.pop();
+    std::vector<bool> visited(f.pixels.size());
+    std::vector<int> changed;
+    std::queue<std::pair<int, int>> queue;
+    queue.push({x, y});
+    visited[y * p.width + x] = true;
+    while (!queue.empty()) {
+        auto [cx, cy] = queue.front();
+        queue.pop();
+        changed.push_back(cy * p.width + cx);
         for (auto [nx, ny] : {std::pair{cx - 1, cy}, std::pair{cx + 1, cy}, std::pair{cx, cy - 1},
                               std::pair{cx, cy + 1}}) {
             if (nx < 0 || ny < 0 || nx >= p.width || ny >= p.height)
                 continue;
-            auto i = ny * p.width + nx;
-            if (f.pixels[i] == old && f.attributes[(ny / 16) * p.block_width() + nx / 16] == pal) {
-                f.pixels[i] = c;
-                f.paint_mask[i] = c;
-                q.push({nx, ny});
+            int index = ny * p.width + nx;
+            if (!visited[index] && f.pixels[index] == old &&
+                f.attributes[(ny / 16) * p.block_width() + nx / 16] == old_palette) {
+                visited[index] = true;
+                queue.push({nx, ny});
             }
         }
     }
+    if (f.paint_mask.empty())
+        f.paint_mask.assign(f.pixels.size(), 255);
+    for (auto index : changed) {
+        f.pixels[index] = c;
+        f.paint_mask[index] = c;
+        if (palette >= 0)
+            f.attributes[(index / p.width / 16) * p.block_width() + (index % p.width) / 16] =
+                static_cast<Byte>(palette);
+    }
 }
+
 static std::string hex(const std::vector<Byte> &data) {
     static constexpr char digits[] = "0123456789abcdef";
     std::string s;

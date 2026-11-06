@@ -60,6 +60,19 @@ int main() {
         invalid[3] = 4;
         rejects([&] { replace_tile(p, 0, pattern, invalid); }, "Invalid linked tile accepted");
 
+        Project paint;
+        paint_line(paint, 0, 15, 0, 16, 0, 2, 1, 2);
+        check(paint.frames[0].attributes[0] == 2 && paint.frames[0].attributes[1] == 2 &&
+                  paint.frames[0].attributes[2] == 0,
+              "Drawing did not apply the chosen color set precisely");
+        auto paint_image = paint.render();
+        auto desired = nes_colors[paint.background[2][2]];
+        check(paint_image.at(15, 0) == desired, "Painted color differs from chosen swatch");
+        Project fill_color;
+        flood_fill(fill_color, 0, 0, 0, 0, 2);
+        check(std::all_of(fill_color.frames[0].attributes.begin(),
+                          fill_color.frames[0].attributes.end(), [](Byte b) { return b == 2; }),
+              "Same-slot fill did not apply the new color set");
         IndexedBrush brush{3, 2, {0, 1, 2, 3, 2, 1}};
         auto cw = transform_brush(brush, BrushTransform::RotateCW);
         check(cw == IndexedBrush{2, 3, {3, 0, 2, 1, 1, 2}}, "Non-square clockwise rotation");

@@ -248,6 +248,29 @@ void Editor::dock_layout() {
     ImGui::DockBuilderDockWindow("Palette test effect", right);
     ImGui::DockBuilderFinish(dock);
 }
+void Editor::choose_workspace(Workspace workspace) {
+    workspace_ = workspace;
+    if (workspace == Workspace::Tiles) {
+        tool_ = Tool::TileBrush;
+        layer_ = -1;
+        palette_group_ = 0;
+        focus_panel("Tiles");
+    } else if (workspace == Workspace::Sprites) {
+        tool_ = Tool::Sprite;
+        palette_group_ = 1;
+        focus_panel("Layers & sprites");
+        focus_panel("Sprite sheet");
+    } else if (workspace == Workspace::Export) {
+        tool_ = Tool::Pan;
+        focus_panel("Hardware");
+    } else {
+        tool_ = Tool::Pencil;
+        layer_ = -1;
+        palette_group_ = 0;
+        focus_panel("Tools");
+        focus_panel("Preview");
+    }
+}
 void Editor::menus() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -318,6 +341,12 @@ void Editor::menus() {
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("View")) {
+            ImGui::MenuItem("Fullscreen", "F11", &fullscreen_);
+            ImGui::MenuItem("Workflow guidance", nullptr, &guidance_);
+            ImGui::MenuItem("Advanced panels", nullptr, &advanced_panels_);
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Help")) {
             ImGui::TextUnformatted("tilezeitjobb 2.0 - NES pixel and tile studio");
             ImGui::Separator();
@@ -385,8 +414,15 @@ void Editor::menus() {
                           {ImGuiKey_V, Tool::Stamp},
                           {ImGuiKey_T, Tool::TileBrush},
                           {ImGuiKey_H, Tool::Pan}})
-        if (ImGui::IsKeyPressed(key))
+        if (ImGui::IsKeyPressed(key)) {
+            if (t == Tool::TileBrush)
+                workspace_ = Workspace::Tiles;
+            else if (t == Tool::Sprite || t == Tool::Move)
+                workspace_ = Workspace::Sprites;
+            else if (t != Tool::Pan)
+                workspace_ = Workspace::Draw;
             tool_ = t;
+        }
     for (int i = 0; i < 4; ++i)
         if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_1 + i)))
             slot_ = i;
@@ -414,6 +450,12 @@ void Editor::tools() {
         if (i++ % 2)
             ImGui::SameLine();
         if (ImGui::Selectable(name, tool_ == t, 0, {108, 25})) {
+            if (t == Tool::TileBrush)
+                workspace_ = Workspace::Tiles;
+            else if (t == Tool::Sprite || t == Tool::Move)
+                workspace_ = Workspace::Sprites;
+            else if (t != Tool::Pan)
+                workspace_ = Workspace::Draw;
             tool_ = t;
             if (t == Tool::TileBrush || t == Tool::Stamp || t == Tool::Palette) {
                 layer_ = -1;
@@ -457,8 +499,11 @@ void Editor::tools() {
 }
 void Editor::palettes() {
     ImGui::Begin("Palettes");
-    ImGui::TextUnformatted("NES SUBPALETTES");
+    ImGui::TextUnformatted("PAINT COLORS");
+    ImGui::TextWrapped("Click a color to paint. Right-click a color to edit it.");
     for (int group = 0; group < 2; ++group) {
+        if (!advanced_panels_ && group != (workspace_ == Workspace::Sprites ? 1 : 0))
+            continue;
         ImGui::PushID(group);
         ImGui::TextUnformatted(group ? "Sprites" : "Background");
         auto &palettes = group ? project.sprite_palettes : project.background;
@@ -481,10 +526,21 @@ void Editor::palettes() {
                     slot_ = c;
                     if (group == 0)
                         layer_ = -1;
+                }
+                if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    palette_ = row;
+                    palette_group_ = group;
+                    slot_ = c;
                     ImGui::OpenPopup("Choose NES color");
                 }
+                if (active && slot_ == c)
+                    ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(),
+                                                        ImGui::GetItemRectMax(),
+                                                        IM_COL32(255, 208, 93, 255), 0, 0, 2);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Slot %d: $%02X (click to edit)", c, palettes[row][c]);
+                    ImGui::SetTooltip(
+                        "Color set %d, color %d ($%02X). Click to paint; right-click to edit.",
+                        row + 1, c + 1, palettes[row][c]);
                 if (ImGui::BeginPopup("Choose NES color")) {
                     for (int n = 0; n < 64; ++n) {
                         if (n % 16)
@@ -513,8 +569,8 @@ void Editor::palettes() {
         ImGui::PopID();
     }
     ImGui::Separator();
-    ImGui::Text("%s palette %d / slot %d", palette_group_ ? "Sprite" : "Background", palette_,
-                slot_);
+    ImGui::Text("Color set %d / paint color %d", palette_ + 1, slot_ + 1);
+    ImGui::TextWrapped("Each 16x16 background block shares one color set.");
     for (int c = 0; c < 4; ++c) {
         if (c)
             ImGui::SameLine();
@@ -554,6 +610,12 @@ void Editor::palettes() {
         ImGui::EndDisabled();
         ImGui::TextWrapped("Swap preserves artwork across all frames by remapping pixels. Slot "
                            "zero remains the NES backdrop/transparency.");
+    }
+    if (project.reference.empty()) {
+        if (ImGui::Button("Import a picture..."))
+            file_dialog(FileAction::Background);
+        ImGui::End();
+        return;
     }
     ImGui::TextUnformatted("IMAGE CONVERSION");
     bool dithering = project.dither;
@@ -702,7 +764,7 @@ void Editor::apply_tool(int x, int y, bool first, bool right) {
     }
     if (tool_ == Tool::Fill) {
         if (first) {
-            flood_fill(project, frame_, x, y, paint);
+            flood_fill(project, frame_, x, y, paint, right ? -1 : palette_);
             changed();
         }
         return;
@@ -720,11 +782,49 @@ void Editor::apply_tool(int x, int y, bool first, bool right) {
         return;
     }
     paint_line(project, frame_, first ? x : last_x_, first ? y : last_y_, x, y,
-               tool_ == Tool::Eraser ? 0 : paint, brush_);
+               tool_ == Tool::Eraser ? 0 : paint, brush_,
+               tool_ == Tool::Eraser || right ? -1 : palette_);
     changed();
 }
 void Editor::canvas() {
     ImGui::Begin("Canvas");
+    for (auto [label, mode] : {std::pair{"Draw pixels", Workspace::Draw},
+                               {"Build with tiles", Workspace::Tiles},
+                               {"Place sprites", Workspace::Sprites},
+                               {"Animate", Workspace::Animate},
+                               {"Export to NES", Workspace::Export}}) {
+        if (mode != Workspace::Draw)
+            ImGui::SameLine();
+        if (workspace_ == mode)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4{.18f, .42f, .40f, 1});
+        bool clicked = ImGui::Button(label);
+        if (workspace_ == mode)
+            ImGui::PopStyleColor();
+        if (clicked)
+            choose_workspace(mode);
+    }
+    if (guidance_) {
+        const char *instruction =
+            workspace_ == Workspace::Tiles ? "Pick a tile on the right, then paint it here. Edit "
+                                             "its pixels to change matching copies."
+            : workspace_ == Workspace::Sprites
+                ? "Import a sprite sheet, pick an 8x8 tile, then click the canvas to place it."
+            : workspace_ == Workspace::Animate
+                ? "Duplicate a frame below, change the drawing, then press Play. Onion skin shows "
+                  "the previous frame."
+            : workspace_ == Workspace::Export ? "Check the hardware report on the right, then "
+                                                "export this frame as a runnable NES ROM."
+                                              : "Choose a paint color on the left, then draw here. "
+                                                "You can also import a picture.";
+        ImGui::TextWrapped("%s", instruction);
+    }
+    if (workspace_ == Workspace::Draw && ImGui::SmallButton("Import a picture..."))
+        file_dialog(FileAction::Background);
+    if (workspace_ == Workspace::Sprites && ImGui::SmallButton("Import sprite sheet..."))
+        file_dialog(FileAction::Sprites);
+    if (workspace_ == Workspace::Export && ImGui::Button("Export current frame..."))
+        file_dialog(FileAction::Export);
+    ImGui::Separator();
     ImGui::Text("%d x %d  |  Frame %zu  |  %s", project.width, project.height, frame_ + 1,
                 layer_ < 0 ? "Background" : project.frames[frame_].sprites.at(layer_).name.c_str());
     ImGui::SameLine();
@@ -1368,19 +1468,28 @@ bool Editor::tick() {
         tools();
         palettes();
         canvas();
-        layers();
-        timeline();
-        preview();
-        hardware();
-        attributes();
-        sprite_sheet();
-        tiles();
-        brush_controls();
-        palette_effect();
+        if (advanced_panels_ || workspace_ == Workspace::Sprites)
+            layers();
+        if (advanced_panels_ || workspace_ == Workspace::Animate)
+            timeline();
+        if (advanced_panels_ || workspace_ == Workspace::Draw || workspace_ == Workspace::Tiles ||
+            workspace_ == Workspace::Animate)
+            preview();
+        if (advanced_panels_ || workspace_ == Workspace::Export)
+            hardware();
+        if (advanced_panels_)
+            attributes();
+        if (advanced_panels_ || workspace_ == Workspace::Sprites)
+            sprite_sheet();
+        if (advanced_panels_ || workspace_ == Workspace::Tiles)
+            tiles();
+        if (advanced_panels_ || !clipboard_.empty())
+            brush_controls();
+        if (advanced_panels_)
+            palette_effect();
         if (focus_workflows_) {
             focus_panel("Tools");
-            focus_panel("Tiles");
-            focus_panel("Hardware");
+            focus_panel("Preview");
             focus_workflows_ = false;
         }
         popups();

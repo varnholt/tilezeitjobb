@@ -69,8 +69,9 @@ struct Project {
     void set_backdrop(Byte color);
     bool operator==(const Project &) const = default;
 };
-void paint_line(Project &, std::size_t frame, int x0, int y0, int x1, int y1, Byte color, int size);
-void flood_fill(Project &, std::size_t frame, int x, int y, Byte color);
+void paint_line(Project &, std::size_t frame, int x0, int y0, int x1, int y1, Byte color, int size,
+                int palette = -1);
+void flood_fill(Project &, std::size_t frame, int x, int y, Byte color, int palette = -1);
 void save_project(const std::filesystem::path &, const Project &);
 Project load_project(const std::filesystem::path &);
 Project demo_project();
