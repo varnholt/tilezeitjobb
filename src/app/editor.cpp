@@ -397,7 +397,7 @@ void Editor::menus() {
         }
         if (ImGui::BeginMenu("Help")) {
             if (ImGui::MenuItem("Start here..."))
-                show_start();
+                guard([this] { show_start(); });
             ImGui::TextUnformatted("tilezeitjobb 2.0 - NES pixel and tile studio");
             ImGui::Separator();
             ImGui::TextUnformatted("P pencil  E eraser  F fill  A attributes  I picker");
