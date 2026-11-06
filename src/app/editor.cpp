@@ -1265,6 +1265,30 @@ void Editor::layers(bool embedded) {
     if (layer_ >= 0 && static_cast<std::size_t>(layer_) < f.sprites.size()) {
         auto &s = f.sprites[layer_];
         ImGui::Separator();
+        ImGui::TextUnformatted("Sprite pixels (click to paint)");
+        auto origin = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("sprite-pixels", {128, 128});
+        auto *draw = ImGui::GetWindowDrawList();
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                auto c = s.pixels[y * 8 + x];
+                ImU32 rgb =
+                    c ? ImGui::ColorConvertFloat4ToU32(color(project.sprite_palettes[s.palette][c]))
+                      : IM_COL32(28, 34, 40, 255);
+                draw->AddRectFilled({origin.x + x * 16.f, origin.y + y * 16.f},
+                                    {origin.x + (x + 1) * 16.f, origin.y + (y + 1) * 16.f}, rgb);
+                draw->AddRect({origin.x + x * 16.f, origin.y + y * 16.f},
+                              {origin.x + (x + 1) * 16.f, origin.y + (y + 1) * 16.f},
+                              IM_COL32(60, 70, 80, 255));
+            }
+        if (ImGui::IsItemHovered() && (ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1))) {
+            if (ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1))
+                checkpoint();
+            int x = int((ImGui::GetIO().MousePos.x - origin.x) / 16),
+                y = int((ImGui::GetIO().MousePos.y - origin.y) / 16);
+            s.pixels[y * 8 + x] = Byte(ImGui::IsMouseDown(1) ? 0 : slot_);
+            changed();
+        }
         char name[256];
         std::snprintf(name, sizeof(name), "%s", s.name.c_str());
         if (ImGui::InputText("Name", name, sizeof(name))) {
@@ -1295,30 +1319,6 @@ void Editor::layers(bool embedded) {
                 *value = v;
                 changed();
             }
-        }
-        ImGui::TextUnformatted("Sprite pixels (click to paint)");
-        auto origin = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("sprite-pixels", {128, 128});
-        auto *draw = ImGui::GetWindowDrawList();
-        for (int y = 0; y < 8; ++y)
-            for (int x = 0; x < 8; ++x) {
-                auto c = s.pixels[y * 8 + x];
-                ImU32 rgb =
-                    c ? ImGui::ColorConvertFloat4ToU32(color(project.sprite_palettes[s.palette][c]))
-                      : IM_COL32(28, 34, 40, 255);
-                draw->AddRectFilled({origin.x + x * 16.f, origin.y + y * 16.f},
-                                    {origin.x + (x + 1) * 16.f, origin.y + (y + 1) * 16.f}, rgb);
-                draw->AddRect({origin.x + x * 16.f, origin.y + y * 16.f},
-                              {origin.x + (x + 1) * 16.f, origin.y + (y + 1) * 16.f},
-                              IM_COL32(60, 70, 80, 255));
-            }
-        if (ImGui::IsItemHovered() && (ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1))) {
-            if (ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1))
-                checkpoint();
-            int x = int((ImGui::GetIO().MousePos.x - origin.x) / 16),
-                y = int((ImGui::GetIO().MousePos.y - origin.y) / 16);
-            s.pixels[y * 8 + x] = Byte(ImGui::IsMouseDown(1) ? 0 : slot_);
-            changed();
         }
         if (ImGui::Button("Delete sprite")) {
             checkpoint();

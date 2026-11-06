@@ -220,6 +220,7 @@ void Editor::add_blank_sprite() {
     slot_ = 1;
     brush_ = 1;
     zoom_ = 12;
+    grid_ = 1;
     fit_countdown_ = -1;
     focus_sprite_ = true;
     changed();
@@ -431,12 +432,12 @@ void Editor::guided_workspace() {
         if (guidance_)
             next_steps();
         ImGui::SeparatorText("Sprite objects");
-        float object_height = std::max(220.f, ImGui::GetContentRegionAvail().y * .6f);
+        float object_height = std::max(220.f, ImGui::GetContentRegionAvail().y - 48.f);
         ImGui::BeginChild("sprite-properties", {0, object_height});
         layers(true);
         ImGui::EndChild();
-        ImGui::SeparatorText("Sprite sheet");
-        sprite_sheet(true);
+        if (ImGui::CollapsingHeader("Sprite sheet (optional)"))
+            sprite_sheet(true);
     } else if (workspace_ == Workspace::Export)
         hardware(true);
     else
