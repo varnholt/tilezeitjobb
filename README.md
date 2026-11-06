@@ -1,201 +1,228 @@
 # tilezeitjobb
 
-A NES pixel and tile studio in C++20, using Dear ImGui, GLFW and OpenGL 3.3.
-Qt, qmake, generated forms and the old singleton UI/model have been removed.
+[![CI](https://github.com/varnholt/tilezeitjobb/actions/workflows/build.yml/badge.svg)](https://github.com/varnholt/tilezeitjobb/actions/workflows/build.yml)
 
-## Build and run
+A pixel and tile editor for the NES, written in C++20. Draw with hardware color sets, edit repeated tiles in place,
+arrange sprites and compile the picture directly into a runnable NES ROM. The editor and command-line tools share
+the same image model and exporter.
 
-Windows: install CMake 3.24+ and Visual Studio 2022 with Desktop development with C++.
-The first configuration downloads pinned dependencies from their official repositories.
+| | |
+|---|---|
+| ![pixel drawing workspace](docs/images/editor.png) | ![linked tile editing workspace](docs/images/tiles.png) |
+| tools and paint colors beside the canvas | edit a tile once and update its matching map instances |
+
+The screenshots come straight from the editor's built-in demo. No external artwork is required.
+
+- indexed drawing: pencil, fill, eraser, color picking, selections and captured brushes
+- linked 8x8 tiles: paint maps, inspect pattern usage and edit matching tiles together
+- four background and four sprite color sets, palette copying and appearance-preserving slot swaps
+- sprite objects with per-object colors, position, visibility, flipping and background priority
+- frame editing, timed playback and onion skin; brush rotation, flipping, transparency and edge wrapping
+- image import, ordered dithering, automatic palette fitting and source-image watching that preserves background paint
+- direct NROM ROM export, plus CHR, nametables, palettes, OAM and C arrays for use in a game
+
+## Use
+
+[Build the editor](#build), then open a project, import a picture or start with the demo:
+
+```sh
+tilezeitjobb --demo --fullscreen
+```
+
+The editor starts maximized. F11 switches between fullscreen and the previous window state.
+
+The action bar contains New, Open, Save, Import and Export NES. Its Editing selector chooses the working mode:
+
+| Mode | Workspace |
+|---|---|
+| Draw pixels | painting tools and color sets on the left; selection and brush properties on the right |
+| Build tile maps | tile painting tools on the left; pattern catalog and linked tile editor on the right |
+| Place sprites | sprite placement tools, object properties and the source sprite sheet |
+| Animate | drawing workspace with the frame timeline below the canvas |
+
+Click a color swatch to choose paint; right-click it to edit the NES color. The active tool and paint color are also
+shown above the canvas. View > Advanced layout exposes the dockable workspace, including attribute inspection,
+hardware reports, the original palette-test animation and separate preview panels.
+
+| Input | Action |
+|---|---|
+| left drag | draw or use the active tool |
+| right drag with Pencil | paint the background color |
+| middle drag / wheel | pan / zoom |
+| P / E / F / I | pencil / erase / fill / pick color |
+| R / Ctrl+C / V | select / capture the selection / paint with the captured brush |
+| T / right-click with T | paint a tile / pick a map tile |
+| S / M | place / move a sprite |
+| 1..4 / [ / ] | paint color / decrease or increase brush size |
+| Ctrl+Z / Ctrl+Y | undo / redo |
+| Ctrl+S / Ctrl+O / Ctrl+E | save / open / export NES |
+| F11 | toggle fullscreen |
+
+### Tiles, colors and brushes
+
+A background region is 16x16 pixels and shares one of four color sets. Drawing and filling assign the chosen color
+set to touched regions, so the painted pixel matches the selected swatch. Other pixels in that same region share its
+colors, as on the NES.
+
+The tile catalog lists unique 8x8 background patterns in export order, with their map usage counts. Pick a tile and
+paint with T. Editing its large pixel grid updates every identical pattern in the current frame; disable linked
+editing to change only the picked map location. Each region keeps its color set. Identical patterns merge, and
+unused patterns disappear: the catalog is derived from the map, rather than a library of unplaced assets.
+
+Captured brushes rotate in exact 90-degree steps and flip horizontally or vertically. Slot-zero transparency, 8x8
+snapping and wrapping across canvas edges are independent options. Brushes store color-slot indices, so the
+receiving region supplies their colors. Captured brushes are temporary; save their artwork in the project.
+
+Palette operations can swap nonzero slots while remapping background pixels, sprite patterns and paint overrides
+across all frames, preserving the rendered artwork. Slot zero remains the universal backdrop or sprite transparency.
+Remapping one color set may split previously shared patterns; the catalog and export limits update accordingly.
+
+## NES export
+
+Export NES writes the current frame as a mapper-0 NROM-128 cartridge image. It includes a 6502 startup routine,
+PPU initialization, pattern and palette data, sprite DMA and per-frame NMI OAM refresh. No assembler or external
+NES toolchain is needed.
+
+```sh
+tilezeitjobb-cli compile scene.tzj output/scene --frame 0
+```
+
+The output directory must already exist. The exporter writes:
+
+| File | Contents |
+|---|---|
+| `.nes` | iNES mapper-0 ROM: 16 KiB PRG and 8 KiB CHR |
+| `.chr` | 4 KiB background patterns followed by 4 KiB sprite patterns |
+| `.nam` | one or two 1,024-byte nametables, each with its 64-byte attribute table |
+| `.pal` | 16 background and 16 sprite palette bytes |
+| `.oam` | 256 bytes of object attributes; unused sprites hidden |
+| `.h` | the same assets as static C arrays |
+
+The ROM displays the first 256x240 viewport of the selected frame. A second nametable is uploaded with the correct
+mirroring for a 512x240 or 256x480 picture. Timeline playback and interactive scrolling are editor features, not
+part of the exported ROM runtime; animated ROM playback is not implemented yet.
+
+Open `.nes` files in an emulator or on a flash cartridge supporting mapper 0. Programming a physical cartridge also
+requires a matching board and programmer. Emulator boot and rendering are tested; physical hardware has not been tested.
+
+### Hardware limits
+
+| | |
+|---|---|
+| Background layouts | 256x240, 512x240 or 256x480 |
+| Patterns | at most 256 unique background tiles and 256 unique sprite tiles |
+| Colors | four background and four sprite subpalettes; four entries each, with shared backdrop/transparency |
+| Sprites | 8x8; at most 64 visible objects and eight per scanline |
+| Sprite positions in the ROM | X 0..255, Y 1..239, relative to the initial viewport |
+
+The exporter rejects scenes outside these limits and unsafe color `$0D`. RGB appearance varies between console
+revisions, video signals and emulator palette settings. The editor can preview sprite limits and highlight color regions.
+
+## Command line
+
+```sh
+tilezeitjobb-cli demo output/demo
+tilezeitjobb-cli import picture.png scene.tzj --auto-palettes
+tilezeitjobb-cli import wide.png scene.tzj --layout horizontal
+tilezeitjobb-cli inspect scene.tzj
+tilezeitjobb-cli batch images output/chr --crop 0 0 7 9 --palette colors.pal
+```
+
+Batch conversion processes PNG and BMP files into sequential 4 KiB CHR banks. Crop coordinates and dimensions are in
+8x8 tiles. A batch palette is exactly four NES color-code bytes; the default is `$0F,$01,$21,$30`.
+Frame numbers are zero based. Run `tilezeitjobb-cli --help` for the command summary.
+
+## Build
+
+Requirements: CMake 3.24+, Git, a C++20 compiler and an OpenGL 3.3 driver. The first configuration downloads pinned
+Dear ImGui, GLFW, nlohmann/json and stb sources. The command-line tools and tests do not require a graphics context.
+
+Windows, with Visual Studio 2022 and Desktop development with C++:
 
 ```powershell
 cmake --preset windows
 cmake --build --preset windows --parallel 1
 ctest --preset windows
-.\build\Release\tilezeitjobb.exe
+.\build\Release\tilezeitjobb.exe --demo
 ```
 
-On Linux, install a C++20 compiler, CMake, OpenGL development libraries and GLFW's
-X11/Wayland development prerequisites, then:
+Linux, with OpenGL and the X11/Wayland development headers installed:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-./build/tilezeitjobb
+./build/tilezeitjobb --demo
 ```
 
-`-DTZJ_BUILD_EDITOR=OFF` builds just the portable conversion library, CLI and tests.
-`cmake --install build --config Release --prefix package` makes a runnable package
-with the original palette-test assets. The editor requires an OpenGL 3.3 driver.
+| Option | Default | |
+|---|---|---|
+| `TZJ_BUILD_EDITOR` | `ON` | ImGui desktop editor; disable for a headless conversion build |
+| `BUILD_TESTING` | `ON` | core and editing-workflow tests |
 
-## Editing
+Install the editor, CLI, palette-test assets and licenses together:
 
-The editor starts maximized. **F11** or **View > Fullscreen** switches fullscreen
-on and off; `--fullscreen` starts directly in fullscreen. The previous window size
-and maximized state are restored when leaving fullscreen.
-
-Choose a task above the canvas: **Draw pixels**, **Build with tiles**, **Place
-sprites**, **Animate**, or **Export to NES**. Each task shows its relevant panels
-and a short instruction. **View > Advanced panels** exposes the entire workspace.
-Click a color swatch to choose paint; right-click it to edit the NES color.
-Drawing and filling assign the chosen color set to touched 16x16 background blocks,
-so the painted pixel matches the swatch. Other pixels in that same block share its
-color set, as required by NES hardware.
-
-
-The dockable workspace includes the canvas, tools, background and sprite palettes,
-objects, sprite-sheet picker, preview, attribute grid, hardware report and timeline.
-
-- Import PNG/BMP/JPEG/TGA images or drop a background image onto the window.
-- Choose a 256x240, 512x240 or 256x480 layout. Every 16x16 background region uses
-  one of four subpalettes; all palettes share the universal backdrop.
-- Use pencil, erase, bounded flood fill, palette painting, color picking,
-  rectangular selections and captured brushes. Brushes can be flipped horizontally
-  or vertically. Brush sizes are 1, 2, 4 and 8 pixels.
-- Import a sprite sheet, pick an 8x8 tile and place it. Edit individual sprite
-  pixels, visibility, position, palette, X/Y flipping and background priority.
-  Reorder sprites to change OAM priority. Generate objects from nonempty sheet tiles.
-- Use the automatic palette fitter or reapply the chosen palettes with optional
-  ordered dithering. Source image watching and reapplying palettes preserve painted pixels. Clear background paint restores the source conversion.
-- Zoom with the wheel and pan with the middle button. Toggle pixel/tile/block grids,
-  the reference overlay, palette highlighting, sprite-limit preview and scanlines.
-- Duplicate or add frames, set their durations, play the timeline and use onion skin.
-- The original animated palette-test patterns are available in the Palette test effect tab.
-
-Shortcuts: **P** pencil, **E** erase, **F** fill, **A** attributes, **I** pick,
-**S** sprite, **M** move sprite, **R** select, **V** captured brush, **T** tile brush, **H** pan;
-**1..4** select a color slot; **[ / ]** change brush size. Standard save, open,
-undo, redo, copy, cut, paste and export use Ctrl shortcuts shown in the menus.
-Selections and captured brushes store color-slot indices, so destination palettes
-control their displayed colors.
-
-## Project compatibility
-
-Version 2 `.tzj` files are self-contained JSON: indexed frame pixels, attribute
-regions, palettes, sprite objects and source images are stored together. Saving
-uses a temporary file followed by atomic replacement. Undo/redo keeps up to 32
-snapshots with a 64 MiB history target.
-
-The loader also accepts the original QSettings INI `.tzj` format. Referenced image
-files must still exist when importing an old project; relative paths resolve beside
-that project. Legacy RGB colors are mapped to NES color codes, and source-image
-dimensions infer a two-screen layout. Legacy projects did not store layout in the
-project file, so confirm the inferred layout. New saves use version 2; the old Qt
-application cannot read them. Importing an old file does not modify it until saved.
-
-The NES model deliberately limits background and sprite palettes to four each.
-Legacy projects using extra palettes or invalid attribute indices need correction.
-Source-image changes are checked once per second while Watch source images is enabled.
-Painted background pixels are preserved through a separate paint mask. Sprite-sheet
-changes refresh sprite tiles; missing source files do not prevent opening version 2 projects.
-
-## Compile directly to NES
-
-Use **File > Export NES ROM + assets** or:
-
-```powershell
-.\build\Release\tilezeitjobb-cli.exe demo build\demo
-.\build\Release\tilezeitjobb-cli.exe compile my-project.tzj build\scene --frame 0
-.\build\Release\tilezeitjobb-cli.exe import picture.png my-project.tzj --auto-palettes
-.\build\Release\tilezeitjobb-cli.exe inspect my-project.tzj
-.\build\Release\tilezeitjobb-cli.exe batch images build\chr --crop 0 0 7 9
+```sh
+cmake --install build --config Release --prefix package
 ```
 
-Batch conversion processes PNG/BMP files into sequential 4 KiB CHR banks. Crop
-coordinates and dimensions are in tiles. `--palette colors.pal` accepts exactly
-four NES color-code bytes; the default is `$0F,$01,$21,$30`.
+## Project files
 
-Export writes:
+Version 2 `.tzj` files are self-contained JSON: indexed frames, color regions, palettes, sprite objects and source
+images are stored together. Saves use a temporary file followed by replacement of the destination. Undo/redo keeps
+up to 32 snapshots with a 64 MiB history target.
 
-| File | Contents |
-| --- | --- |
-| `.nes` | iNES mapper-0/NROM-128 ROM with 16 KiB PRG and 8 KiB CHR |
-| `.chr` | 4 KiB deduplicated background patterns, then 4 KiB sprite patterns |
-| `.nam` | One or two 1,024-byte nametables, each including its 64-byte attribute table |
-| `.pal` | 16 background and 16 sprite palette bytes |
-| `.oam` | 256 bytes of sprite OAM; unused objects hidden |
-| `.h` | The same assets as static C arrays for integration into a game |
+The original QSettings INI `.tzj` format is also accepted. Its referenced images must still exist; relative paths
+resolve beside the project. Legacy RGB colors are mapped to NES color codes, and image dimensions infer a two-screen
+layout. Check that layout after import, since the old project format did not store it. Saving writes version 2,
+which the original Qt application cannot read. Loading alone does not modify the original file.
 
-The ROM includes a 6502 startup routine, PPU initialization, palette/nametable
-uploads, sprite DMA and per-frame NMI OAM refresh. No external assembler is needed.
-It displays the **current frame and first viewport**. A second nametable is uploaded
-with the appropriate mirroring; interactive scrolling and animated ROM playback
-are future work. The editor's animation timeline is saved, but ROM export does not
-compile the whole timeline.
+## Tests
 
-Export rejects more than 256 unique tiles per pattern bank, more than 64 visible
-sprites, more than eight sprites on a scanline, and unsafe color `$0D`. Sprite
-positions must be X 0..255 and Y 1..239 for the initial viewport. NES sprites cannot
-be drawn on the first scanline through ordinary OAM positioning. Palette RGB
-appearance varies between console revisions, signals and emulator palette settings.
+| Suite | Coverage |
+|---|---|
+| Core | CHR bitplanes, deduplication, attribute packing and screen boundaries, OAM, ROM headers/vectors, file roundtrips, legacy import and hardware-limit rejection |
+| Editing workflows | linked tile updates, tile painting, brush rotation and wrapping, palette remapping, selected-color drawing/fill and undo |
+| Emulator integration | five exported scenes booted for 120 frames in pinned JSNES 2.1.0; rendered pixels and all nametable bytes compared with the project data |
 
-Open the `.nes` in a NES emulator, or copy it to a flash cartridge that supports
-mapper 0. Producing a file does not program a cartridge: a physical cartridge also
-needs a matching NROM board and the appropriate programming hardware. Emulator
-boot/render tests are included; physical hardware has not been tested.
-
-## Verification
-
-The C++ test suites cover linked tile edits, brush transforms and wrapping, palette
-remapping, bitplane order, deduplication, attribute packing including
-the bottom row and second-screen boundary, OAM, ROM headers/vectors, project and PNG
-roundtrips, legacy import, undo/redo, quantization and hardware-limit rejection.
-
-An additional integration test boots five exported ROMs for 120 frames in pinned
-JSNES 2.1.0, checks 61,184 rendered pixels per scene, and verifies every nametable
-byte. JSNES reserves framebuffer row zero for its pre-render dummy scanline; that
-row is excluded from the pixel comparison.
-
-```powershell
-npm ci --prefix tests/emulator
+```sh
+ctest --test-dir build -C Release --output-on-failure
+npm ci --prefix tests/emulator --ignore-scripts
 node tests/rom_emulator.mjs tests/emulator/node_modules/jsnes/src/index.js build/test-output
-.\build\Release\tilezeitjobb.exe --demo --smoke-test --screenshot build\editor.png
 ```
 
-## Pro Motion workflows selected for NES work
+The emulator comparison checks 61,184 pixels per frame. JSNES's pre-render dummy framebuffer row is excluded.
+The desktop smoke test also renders real editor screenshots, for example on Windows:
 
-The priorities come from [Pro Motion NG's documented features](https://www.cosmigo.com/pixel_animation_software),
-especially tile maps, captured brushes and indexed palette editing.
+```powershell
+.\build\Release\tilezeitjobb.exe --demo --workspace tiles --smoke-test --screenshot tiles.png
+```
 
-| Priority | Workflow | Status |
-| --- | --- | --- |
-| 1 | Edit shared tiles in place and paint tile maps | Implemented in **Tiles** and the **T** tool |
-| 2 | Captured brush transforms, transparency and seamless drawing | Implemented in **Brush** |
-| 3 | Palette reordering while preserving artwork | Implemented under **Palettes > Palette operations** |
-| 4 | X/Y symmetry, pixel-perfect strokes and shape tools | Next drawing workflow |
-| 5 | Richer onion skin, animation editing, sprite-sheet and animated ROM export | Next animation workflow |
-| 6 | Metasprites, 8x16 sprites and reusable animation assets | Follow-up NES workflow |
+## Layout
 
-**Tiles:** the catalog lists unique 8x8 background patterns in current export order,
-including each pattern's map usage count. Select a pattern, then **T** paints it
-on an 8x8 grid. Right-click or Alt-click picks a pattern from the map. Edit the
-large tile grid to update all identical patterns in the current frame, or disable
-Edit all identical map tiles to change only its picked map location. Each 16x16
-region retains its palette. Identical patterns automatically merge, and unused
-patterns disappear from the catalog; the catalog is derived from the map rather
-than a separate library of unplaced assets. Tile edits support undo and survive
-source-image reloads. More than 256 patterns still blocks NROM export.
+| Path | Contents |
+|---|---|
+| `src/core/` | project model, image conversion, editing operations and NES compiler |
+| `src/app/` | desktop workspace and rendering |
+| `src/cli.cpp` | headless conversion and export commands |
+| `tests/` | core, editing and emulator integration tests |
+| `data/paltesteffect/` | original animated palette-test patterns |
+| `docs/images/` | screenshots rendered by the editor |
 
-**Brush:** capture a rectangular selection with Ctrl+C or the Capture button. Rotate
-it in exact 90-degree steps, flip it, and paint with **V**. Slot-zero transparency,
-8x8 snapping and wrapping across canvas edges are independent options. These brushes
-are temporary editing tools, like the clipboard; save their artwork in the project
-before closing. Canvas regions keep their own palettes when a brush is pasted.
+## Not yet
 
-**Palette operations:** choose a background or sprite palette, then swap slots 1..3.
-Preserve existing artwork remaps matching pixels, sprite patterns and paint overrides
-across **all frames**, keeping the rendered image unchanged. Without that option,
-the same operation recolors the artwork. Copy/Paste colors transfers the three
-nonzero entries between subpalettes. Slot zero stays reserved for the universal
-background/sprite transparency. Preserving appearance can split formerly shared
-patterns when only one subpalette is reordered; the tile count updates accordingly.
+- symmetry, pixel-perfect stroke cleanup and a larger set of drawing primitives
+- animated ROM playback, sprite-sheet animation export and richer animation editing
+- metasprites, 8x16 sprites and a persistent library of unplaced tiles
+- banked mappers and physical hardware verification
 
-The editor is not full Pro Motion NG feature parity. Banked mappers, animated ROM
-playback and physical hardware testing also remain follow-up work.
+## Background
+
+The project began as a Qt-based NES paint tool. The current editor uses Dear ImGui, GLFW and OpenGL, with a separate
+C++20 core shared by the GUI, command-line tools and tests. The [original editor screenshot](tilezeitjobb.png) remains
+in the repository.
 
 ## License
 
-GPL-3.0; see [LICENSE](LICENSE). Dear ImGui and GLFW use their upstream licenses;
-nlohmann/json is MIT; stb is public-domain/MIT. JSNES is an optional test dependency
-under Apache-2.0.
+GPL-3.0, see [LICENSE](LICENSE). Dear ImGui and GLFW retain their upstream licenses; nlohmann/json is MIT and stb is
+public-domain/MIT. JSNES is an optional Apache-2.0 test dependency. Installed packages include the runtime dependency licenses.

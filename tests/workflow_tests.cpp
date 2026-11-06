@@ -131,7 +131,7 @@ int main() {
             check(colors.render(f) == images[f], "Palette swap changed artwork");
         check(colors.frames[0].paint_mask[2 * colors.width + 2] == 3,
               "Palette swap missed paint overrides");
-        check(colors.frames[0].sprites[0].pixels[2] == 0, "Palette swap lost sprite transparency");
+        check(colors.frames[0].sprites.back().pixels[2] == 0, "Palette swap lost sprite transparency");
         check(colors.background[0][0] == original.background[0][0],
               "Palette swap modified backdrop");
         swap_palette_slots(colors, false, 0, 1, 3, true);

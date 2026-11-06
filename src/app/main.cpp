@@ -40,18 +40,22 @@ static void glfw_error(int code, const char *message) {
 int main(int argc, char **argv) {
     bool smoke = false, demo = false, start_fullscreen = false;
     std::filesystem::path input, screenshot;
+    std::string workspace = "draw";
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--smoke-test")
             smoke = true;
         else if (arg == "--fullscreen")
             start_fullscreen = true;
+        else if (arg == "--workspace" && i + 1 < argc)
+            workspace = argv[++i];
         else if (arg == "--demo")
             demo = true;
         else if (arg == "--screenshot" && i + 1 < argc)
             screenshot = argv[++i];
         else if (arg == "--help") {
-            std::cout << "tilezeitjobb [PROJECT.tzj] [--demo] [--fullscreen] [--smoke-test] "
+            std::cout << "tilezeitjobb [PROJECT.tzj] [--demo] [--fullscreen] [--workspace "
+                         "draw|tiles|sprites|animate|export] [--smoke-test] "
                          "[--screenshot FILE.png]\n";
             return 0;
         } else
@@ -73,6 +77,7 @@ int main(int argc, char **argv) {
         glfwTerminate();
         return 1;
     }
+    glfwSetWindowSizeLimits(window, 1040, 680, GLFW_DONT_CARE, GLFW_DONT_CARE);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
     IMGUI_CHECKVERSION();
@@ -96,7 +101,7 @@ int main(int argc, char **argv) {
     style.Colors[ImGuiCol_CheckMark] = {.47f, .84f, .73f, 1};
     style.Colors[ImGuiCol_SliderGrab] = {.47f, .84f, .73f, 1};
     ImFontConfig font;
-    font.SizePixels = 15;
+    font.SizePixels = 17;
     io.Fonts->AddFontDefault(&font);
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -116,6 +121,7 @@ int main(int argc, char **argv) {
             editor.set_demo();
         if (!input.empty())
             editor.open(input);
+        editor.start_workspace(workspace);
         int frames = 0;
         bool running = true;
         while (running) {

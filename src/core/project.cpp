@@ -608,14 +608,66 @@ Project load_project(const std::filesystem::path &path) {
 }
 Project demo_project() {
     Project p;
-    auto &f = p.frames[0];
+    p.background = {{{15, 1, 17, 48}, {15, 9, 25, 41}, {15, 7, 23, 39}, {15, 1, 33, 49}}};
+    auto &frame = p.frames[0];
     for (int y = 0; y < p.height; ++y)
         for (int x = 0; x < p.width; ++x) {
-            f.attributes[(y / 16) * 16 + x / 16] = Byte((x / 64 + y / 64) % 4);
-            f.pixels[y * p.width + x] = Byte(((x / 4) ^ (y / 4)) & 3);
+            int palette = y >= 208 ? 3 : y >= 176 ? 2 : y >= 160 ? 1 : 0;
+            Byte pixel = 1;
+            if (y < 160) {
+                int mountain = 140 - (64 - std::abs(x % 128 - 64)) / 2;
+                if (y >= mountain)
+                    pixel = y < mountain + 3 ? 3 : 2;
+                if (y < 96 && x % 40 == 12 && y % 32 == 12)
+                    pixel = 3;
+                int mx = x - 211, my = y - 39;
+                if (mx * mx + my * my < 196 && (mx + 7) * (mx + 7) + (my - 4) * (my - 4) > 169)
+                    pixel = 3;
+            } else if (y < 176)
+                pixel = y < 166 ? 3 : static_cast<Byte>(x % 8 < 2 ? 2 : 1);
+            else if (y < 208)
+                pixel = static_cast<Byte>(y % 8 == 0 || (x + (y / 8 % 2) * 8) % 16 == 0 ? 1 : 2);
+            else
+                pixel = static_cast<Byte>(y % 8 < 2 && x % 16 < 9                    ? 2
+                                          : y % 16 == 3 && x % 32 > 5 && x % 32 < 10 ? 3
+                                                                                     : 1);
+            if (x >= 80 && x < 144 && y >= 96 && y < 160) {
+                palette = 2;
+                pixel = static_cast<Byte>(y % 8 == 0 || (x + (y / 8 % 2) * 8) % 16 == 0 ? 1 : 2);
+                if (y < 104 && (x / 8) % 2 == 0)
+                    pixel = 0;
+                if (x % 16 >= 5 && x % 16 <= 10 && y % 24 >= 4 && y % 24 <= 12)
+                    pixel = 0;
+                if (x % 16 >= 5 && x % 16 <= 10 && y % 24 == 3)
+                    pixel = 3;
+                if (x >= 108 && x < 120 && y >= 140)
+                    pixel = 0;
+            }
+            frame.attributes[(y / 16) * p.block_width() + x / 16] = static_cast<Byte>(palette);
+            frame.pixels[y * p.width + x] = pixel;
         }
+    Sprite explorer;
+    explorer.name = "Explorer";
+    explorer.x = 48;
+    explorer.y = 152;
+    const char *rows[] = {"00222200", "00222200", "00022000", "01111110",
+                          "00111100", "00111100", "00100100", "03300330"};
+    p.sprite_sheet = {8, 8, std::vector<Byte>(8 * 8 * 4)};
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x) {
+            Byte slot = static_cast<Byte>(rows[y][x] - '0');
+            explorer.pixels[y * 8 + x] = slot;
+            auto c = nes_colors[p.sprite_palettes[0][slot]];
+            auto i = (y * 8 + x) * 4;
+            p.sprite_sheet.rgba[i] = c.r;
+            p.sprite_sheet.rgba[i + 1] = c.g;
+            p.sprite_sheet.rgba[i + 2] = c.b;
+            p.sprite_sheet.rgba[i + 3] = slot ? 255 : 0;
+        }
+    frame.sprites.push_back(std::move(explorer));
     return p;
 }
+
 void History::checkpoint(const Project &p) {
     if (!past_.empty() && past_.back() == p)
         return;

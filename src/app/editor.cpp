@@ -219,12 +219,16 @@ void Editor::refresh_textures() {
     refresh_ = false;
 }
 void Editor::dock_layout() {
+    if (!advanced_panels_)
+        return;
     ImGuiID dock = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
     if (layout_built_)
         return;
     layout_built_ = true;
-    if (ImGui::DockBuilderGetNode(dock) && ImGui::DockBuilderGetNode(dock)->IsSplitNode())
+    if (!force_layout_ && ImGui::DockBuilderGetNode(dock) &&
+        ImGui::DockBuilderGetNode(dock)->IsSplitNode())
         return;
+    force_layout_ = false;
     ImGui::DockBuilderRemoveNode(dock);
     ImGui::DockBuilderAddNode(dock, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dock, ImGui::GetMainViewport()->WorkSize);
@@ -250,6 +254,7 @@ void Editor::dock_layout() {
 }
 void Editor::choose_workspace(Workspace workspace) {
     workspace_ = workspace;
+    fit_countdown_ = 1;
     if (workspace == Workspace::Tiles) {
         tool_ = Tool::TileBrush;
         layer_ = -1;
@@ -275,15 +280,7 @@ void Editor::menus() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New", "Ctrl+N"))
-                guard([this] {
-                    project = Project{};
-                    project_path_.clear();
-                    frame_ = 0;
-                    layer_ = -1;
-                    history_.clear();
-                    dirty_ = false;
-                    refresh_ = true;
-                });
+                guard([this] { new_project(); });
             if (ImGui::MenuItem("Open project...", "Ctrl+O"))
                 guard([this] { file_dialog(FileAction::Open); });
             if (ImGui::MenuItem("Save project", "Ctrl+S"))
@@ -344,7 +341,10 @@ void Editor::menus() {
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("Fullscreen", "F11", &fullscreen_);
             ImGui::MenuItem("Workflow guidance", nullptr, &guidance_);
-            ImGui::MenuItem("Advanced panels", nullptr, &advanced_panels_);
+            if (ImGui::MenuItem("Advanced layout", nullptr, &advanced_panels_)) {
+                layout_built_ = false;
+                force_layout_ = true;
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help")) {
@@ -369,16 +369,7 @@ void Editor::menus() {
     auto &io = ImGui::GetIO();
     if (io.KeyCtrl) {
         if (ImGui::IsKeyPressed(ImGuiKey_N))
-            guard([this] {
-                project = Project{};
-                project_path_.clear();
-                frame_ = 0;
-                layer_ = -1;
-                selection_ = {};
-                history_.clear();
-                dirty_ = false;
-                refresh_ = true;
-            });
+            guard([this] { new_project(); });
         if (ImGui::IsKeyPressed(ImGuiKey_S))
             save(io.KeyShift);
         if (ImGui::IsKeyPressed(ImGuiKey_O))
@@ -431,31 +422,40 @@ void Editor::menus() {
     if (ImGui::IsKeyPressed(ImGuiKey_RightBracket))
         brush_ = std::min(8, brush_ * 2);
 }
-void Editor::tools() {
-    ImGui::Begin("Tools");
-    ImGui::TextUnformatted("DRAW / ARRANGE");
-    ImGui::Separator();
-    int i = 0;
+void Editor::tools(bool embedded) {
+    if (!embedded)
+        ImGui::Begin("Tools");
+    ImGui::SeparatorText("Tools");
+    int column = 0;
     for (auto [name, t] : {std::pair{"Pencil  P", Tool::Pencil},
                            {"Eraser  E", Tool::Eraser},
                            {"Fill  F", Tool::Fill},
-                           {"Palette  A", Tool::Palette},
-                           {"Pick  I", Tool::Picker},
-                           {"Sprite  S", Tool::Sprite},
+                           {"Set colors A", Tool::Palette},
+                           {"Pick color  I", Tool::Picker},
+                           {"Place  S", Tool::Sprite},
                            {"Move  M", Tool::Move},
                            {"Select  R", Tool::Select},
-                           {"Stamp  V", Tool::Stamp},
-                           {"Tile  T", Tool::TileBrush},
+                           {"Brush  V", Tool::Stamp},
+                           {"Paint tile  T", Tool::TileBrush},
                            {"Pan  H", Tool::Pan}}) {
-        if (i++ % 2)
+        bool relevant = t == Tool::Pan || t == Tool::Picker;
+        if (workspace_ == Workspace::Tiles)
+            relevant |= t == Tool::TileBrush || t == Tool::Palette;
+        else if (workspace_ == Workspace::Sprites)
+            relevant |=
+                t == Tool::Sprite || t == Tool::Move || t == Tool::Pencil || t == Tool::Eraser;
+        else
+            relevant |= t == Tool::Pencil || t == Tool::Eraser || t == Tool::Fill ||
+                        t == Tool::Select || t == Tool::Stamp;
+        if (embedded && !relevant)
+            continue;
+        if (column++ % 2)
             ImGui::SameLine();
-        if (ImGui::Selectable(name, tool_ == t, 0, {108, 25})) {
-            if (t == Tool::TileBrush)
-                workspace_ = Workspace::Tiles;
-            else if (t == Tool::Sprite || t == Tool::Move)
-                workspace_ = Workspace::Sprites;
-            else if (t != Tool::Pan)
-                workspace_ = Workspace::Draw;
+        float width =
+            (ImGui::GetContentRegionAvail().x - (column % 2 ? ImGui::GetStyle().ItemSpacing.x : 0));
+        if (column % 2)
+            width /= 2;
+        if (ImGui::Selectable(name, tool_ == t, 0, {width, 28})) {
             tool_ = t;
             if (t == Tool::TileBrush || t == Tool::Stamp || t == Tool::Palette) {
                 layer_ = -1;
@@ -463,43 +463,39 @@ void Editor::tools() {
             }
         }
     }
-    ImGui::Separator();
-    ImGui::TextUnformatted("BRUSH");
-    for (int size : {1, 2, 4, 8}) {
-        if (size != 1)
-            ImGui::SameLine();
-        char label[12];
-        std::snprintf(label, sizeof(label), "%d px", size);
-        if (ImGui::RadioButton(label, brush_ == size))
-            brush_ = size;
+    if (tool_ == Tool::Pencil || tool_ == Tool::Eraser) {
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Brush size");
+        for (int size : {1, 2, 4, 8}) {
+            if (size != 1)
+                ImGui::SameLine();
+            char label[12];
+            std::snprintf(label, sizeof(label), "%d px", size);
+            if (ImGui::Selectable(label, brush_ == size, 0, {45, 25}))
+                brush_ = size;
+        }
     }
-    if (ImGui::SliderFloat("Zoom", &zoom_, 0.5f, 12.0f, "%.1fx")) {
+    if (ImGui::CollapsingHeader("Canvas options", embedded ? 0 : ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Checkbox("Show sprites", &show_sprites_))
+            refresh_ = true;
+        if (ImGui::Checkbox("Preview sprite limits", &hardware_preview_))
+            refresh_ = true;
+        ImGui::Checkbox("Onion skin", &onion_);
+        ImGui::Checkbox("Highlight active color set", &highlight_);
+        ImGui::Checkbox("Reference overlay", &reference_overlay_);
+        if (ImGui::Checkbox("Scanlines", &pal_test_))
+            refresh_ = true;
     }
-    ImGui::SetNextItemWidth(110);
-    const char *grids[]{"None", "1 pixel", "8 pixels", "16 pixels"};
-    int gi = grid_ == 0 ? 0 : grid_ == 1 ? 1 : grid_ == 8 ? 2 : 3;
-    if (ImGui::Combo("Grid", &gi, grids, 4))
-        grid_ = gi == 0 ? 0 : gi == 1 ? 1 : gi == 2 ? 8 : 16;
-    if (ImGui::Checkbox("Show sprites", &show_sprites_))
-        refresh_ = true;
-    if (ImGui::Checkbox("Hardware sprite limits", &hardware_preview_))
-        refresh_ = true;
-    ImGui::Checkbox("Previous frame onion skin", &onion_);
-    ImGui::Checkbox("Highlight current palette", &highlight_);
-    ImGui::Checkbox("Reference overlay", &reference_overlay_);
-    if (ImGui::Checkbox("Scanline preview", &pal_test_))
-        refresh_ = true;
-    ImGui::Separator();
-    if (!clipboard_.empty() && ImGui::Button("Brush options..."))
-        focus_panel("Brush");
-    if (selection_.width > 0 && ImGui::Button("Clear selection"))
-        selection_ = {};
-    ImGui::TextWrapped("%s", status_.c_str());
-    ImGui::End();
+    if (!embedded) {
+        ImGui::TextWrapped("%s", status_.c_str());
+        ImGui::End();
+    }
 }
-void Editor::palettes() {
-    ImGui::Begin("Palettes");
-    ImGui::TextUnformatted("PAINT COLORS");
+
+void Editor::palettes(bool embedded) {
+    if (!embedded)
+        ImGui::Begin("Palettes");
+    ImGui::SeparatorText("Paint color");
     ImGui::TextWrapped("Click a color to paint. Right-click a color to edit it.");
     for (int group = 0; group < 2; ++group) {
         if (!advanced_panels_ && group != (workspace_ == Workspace::Sprites ? 1 : 0))
@@ -510,7 +506,9 @@ void Editor::palettes() {
         for (int row = 0; row < 4; ++row) {
             ImGui::PushID(row);
             bool active = palette_ == row && palette_group_ == group;
-            if (ImGui::RadioButton("##palette", active)) {
+            char label[24];
+            std::snprintf(label, sizeof(label), "Set %d##palette", row + 1);
+            if (ImGui::RadioButton(label, active)) {
                 palette_ = row;
                 palette_group_ = group;
                 if (group == 0)
@@ -571,14 +569,6 @@ void Editor::palettes() {
     ImGui::Separator();
     ImGui::Text("Color set %d / paint color %d", palette_ + 1, slot_ + 1);
     ImGui::TextWrapped("Each 16x16 background block shares one color set.");
-    for (int c = 0; c < 4; ++c) {
-        if (c)
-            ImGui::SameLine();
-        char label[12];
-        std::snprintf(label, sizeof(label), "%d##slot", c + 1);
-        if (ImGui::RadioButton(label, c == slot_))
-            slot_ = c;
-    }
     ImGui::Separator();
     if (ImGui::CollapsingHeader("Palette operations")) {
         const char *slots[]{"1", "2", "3"};
@@ -612,9 +602,10 @@ void Editor::palettes() {
                            "zero remains the NES backdrop/transparency.");
     }
     if (project.reference.empty()) {
-        if (ImGui::Button("Import a picture..."))
+        if (!embedded && ImGui::Button("Import a picture..."))
             file_dialog(FileAction::Background);
-        ImGui::End();
+        if (!embedded)
+            ImGui::End();
         return;
     }
     ImGui::TextUnformatted("IMAGE CONVERSION");
@@ -651,7 +642,8 @@ void Editor::palettes() {
     ImGui::Checkbox("Watch source images", &watch_sources_);
     ImGui::TextWrapped("Reapply and source changes preserve painted pixels. Clear background paint "
                        "restores the reference conversion.");
-    ImGui::End();
+    if (!embedded)
+        ImGui::End();
 }
 void Editor::copy_selection(bool cut) {
     if (selection_.width <= 0 || selection_.height <= 0)
@@ -787,56 +779,48 @@ void Editor::apply_tool(int x, int y, bool first, bool right) {
     changed();
 }
 void Editor::canvas() {
-    ImGui::Begin("Canvas");
-    for (auto [label, mode] : {std::pair{"Draw pixels", Workspace::Draw},
-                               {"Build with tiles", Workspace::Tiles},
-                               {"Place sprites", Workspace::Sprites},
-                               {"Animate", Workspace::Animate},
-                               {"Export to NES", Workspace::Export}}) {
-        if (mode != Workspace::Draw)
-            ImGui::SameLine();
-        if (workspace_ == mode)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4{.18f, .42f, .40f, 1});
-        bool clicked = ImGui::Button(label);
-        if (workspace_ == mode)
-            ImGui::PopStyleColor();
-        if (clicked)
-            choose_workspace(mode);
-    }
-    if (guidance_) {
-        const char *instruction =
-            workspace_ == Workspace::Tiles ? "Pick a tile on the right, then paint it here. Edit "
-                                             "its pixels to change matching copies."
-            : workspace_ == Workspace::Sprites
-                ? "Import a sprite sheet, pick an 8x8 tile, then click the canvas to place it."
-            : workspace_ == Workspace::Animate
-                ? "Duplicate a frame below, change the drawing, then press Play. Onion skin shows "
-                  "the previous frame."
-            : workspace_ == Workspace::Export ? "Check the hardware report on the right, then "
-                                                "export this frame as a runnable NES ROM."
-                                              : "Choose a paint color on the left, then draw here. "
-                                                "You can also import a picture.";
-        ImGui::TextWrapped("%s", instruction);
-    }
-    if (workspace_ == Workspace::Draw && ImGui::SmallButton("Import a picture..."))
-        file_dialog(FileAction::Background);
-    if (workspace_ == Workspace::Sprites && ImGui::SmallButton("Import sprite sheet..."))
-        file_dialog(FileAction::Sprites);
-    if (workspace_ == Workspace::Export && ImGui::Button("Export current frame..."))
-        file_dialog(FileAction::Export);
-    ImGui::Separator();
-    ImGui::Text("%d x %d  |  Frame %zu  |  %s", project.width, project.height, frame_ + 1,
-                layer_ < 0 ? "Background" : project.frames[frame_].sprites.at(layer_).name.c_str());
+    if (!advanced_panels_)
+        place_panel(canvas_rect_);
+    ImGui::Begin("Canvas", nullptr,
+                 advanced_panels_
+                     ? 0
+                     : ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking);
+    ImGui::TextUnformatted(tool_label());
     ImGui::SameLine();
-    if (ImGui::SmallButton("Fit")) {
-        auto available = ImGui::GetContentRegionAvail();
-        zoom_ = std::max(
-            .5f, std::min(available.x / project.width, (available.y - 30) / project.height));
-    }
+    auto &colors = palette_group_ ? project.sprite_palettes : project.background;
+    ImGui::ColorButton("Current paint", color(colors[palette_][slot_]),
+                       ImGuiColorEditFlags_NoTooltip, {25, 21});
+    ImGui::SameLine();
+    ImGui::Text("Set %d / color %d", palette_ + 1, slot_ + 1);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Fit canvas"))
+        fit_countdown_ = 0;
+    ImGui::SetNextItemWidth(145);
+    ImGui::SliderFloat("Zoom", &zoom_, .5f, 12.f, "%.1fx");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90);
+    const char *grids[]{"No grid", "Pixels", "8 x 8", "16 x 16"};
+    int grid = grid_ == 0 ? 0 : grid_ == 1 ? 1 : grid_ == 8 ? 2 : 3;
+    if (ImGui::Combo("Grid", &grid, grids, 4))
+        grid_ = grid == 0 ? 0 : grid == 1 ? 1 : grid == 2 ? 8 : 16;
+    ImGui::Separator();
     ImGui::BeginChild("canvas-scroll", {0, 0}, false,
                       ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    auto origin = ImGui::GetCursorScreenPos();
+    auto available = ImGui::GetContentRegionAvail();
+    if (fit_countdown_ >= 0) {
+        if (fit_countdown_ == 0)
+            zoom_ = std::clamp(std::floor(std::min((available.x - 32) / project.width,
+                                                   (available.y - 32) / project.height) *
+                                          2) /
+                                   2,
+                               .5f, 12.f);
+        --fit_countdown_;
+    }
     ImVec2 size{project.width * zoom_, project.height * zoom_};
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(16.f, (available.x - size.x) / 2));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::max(16.f, (available.y - size.y) / 2));
+    auto origin = ImGui::GetCursorScreenPos();
     ImGui::Image(texture_id(texture_), size);
     bool hover = ImGui::IsItemHovered();
     auto *draw = ImGui::GetWindowDrawList();
@@ -928,8 +912,9 @@ void Editor::canvas() {
     ImGui::EndChild();
     ImGui::End();
 }
-void Editor::layers() {
-    ImGui::Begin("Layers & sprites");
+void Editor::layers(bool embedded) {
+    if (!embedded)
+        ImGui::Begin("Layers & sprites");
     auto &f = project.frames[frame_];
     if (ImGui::Selectable("Background nametable", layer_ < 0))
         layer_ = -1;
@@ -1041,7 +1026,8 @@ void Editor::layers() {
         ImGui::TextWrapped("Select a sprite to edit its pixels, palette, position, priority and "
                            "flipping. Earlier objects have higher OAM priority.");
     }
-    ImGui::End();
+    if (!embedded)
+        ImGui::End();
 }
 void Editor::preview() {
     ImGui::Begin("Preview");
@@ -1053,7 +1039,13 @@ void Editor::preview() {
     ImGui::End();
 }
 void Editor::timeline() {
-    ImGui::Begin("Timeline");
+    if (!advanced_panels_)
+        place_panel(timeline_rect_);
+    ImGui::Begin("Timeline", nullptr,
+                 advanced_panels_
+                     ? 0
+                     : ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking);
     if (ImGui::Button(playing_ ? "Pause" : "Play")) {
         playing_ = !playing_;
         next_frame_ = ImGui::GetTime() + project.frames[frame_].duration_ms / 1000.;
@@ -1111,12 +1103,13 @@ void Editor::timeline() {
     ImGui::EndChild();
     ImGui::End();
 }
-void Editor::hardware() {
-    if (focus_hardware_) {
+void Editor::hardware(bool embedded) {
+    if (!embedded && focus_hardware_) {
         ImGui::SetNextWindowFocus();
         focus_hardware_ = false;
     }
-    ImGui::Begin("Hardware");
+    if (!embedded)
+        ImGui::Begin("Hardware");
     ImGui::TextUnformatted("NES / NROM-128");
     ImGui::Separator();
     if (compiled_) {
@@ -1145,7 +1138,8 @@ void Editor::hardware() {
     ImGui::Separator();
     ImGui::TextWrapped("The .nes file runs in an emulator or on a compatible flash cartridge. Raw "
                        "CHR, nametable, palette, OAM and C header files are also written.");
-    ImGui::End();
+    if (!embedded)
+        ImGui::End();
 }
 void Editor::attributes() {
     ImGui::Begin("Attributes");
@@ -1174,8 +1168,9 @@ void Editor::attributes() {
     ImGui::EndChild();
     ImGui::End();
 }
-void Editor::sprite_sheet() {
-    ImGui::Begin("Sprite sheet");
+void Editor::sprite_sheet(bool embedded) {
+    if (!embedded)
+        ImGui::Begin("Sprite sheet");
     if (project.sprite_sheet.empty()) {
         ImGui::TextWrapped(
             "Import a sprite sheet, select an 8x8 tile, then place it with the Sprite tool.");
@@ -1200,7 +1195,8 @@ void Editor::sprite_sheet() {
             IM_COL32(255, 208, 93, 255), 0, 0, 2);
         ImGui::EndChild();
     }
-    ImGui::End();
+    if (!embedded)
+        ImGui::End();
 }
 void Editor::palette_effect() {
     if (!ImGui::Begin("Palette test effect")) {
@@ -1465,33 +1461,22 @@ bool Editor::tick() {
         menus();
         dock_layout();
         refresh_textures();
-        tools();
-        palettes();
-        canvas();
-        if (advanced_panels_ || workspace_ == Workspace::Sprites)
+        if (advanced_panels_) {
+            tools();
+            palettes();
+            canvas();
             layers();
-        if (advanced_panels_ || workspace_ == Workspace::Animate)
             timeline();
-        if (advanced_panels_ || workspace_ == Workspace::Draw || workspace_ == Workspace::Tiles ||
-            workspace_ == Workspace::Animate)
             preview();
-        if (advanced_panels_ || workspace_ == Workspace::Export)
             hardware();
-        if (advanced_panels_)
             attributes();
-        if (advanced_panels_ || workspace_ == Workspace::Sprites)
             sprite_sheet();
-        if (advanced_panels_ || workspace_ == Workspace::Tiles)
             tiles();
-        if (advanced_panels_ || !clipboard_.empty())
             brush_controls();
-        if (advanced_panels_)
             palette_effect();
-        if (focus_workflows_) {
-            focus_panel("Tools");
-            focus_panel("Preview");
-            focus_workflows_ = false;
-        }
+        } else
+            guided_workspace();
+        focus_workflows_ = false;
         popups();
     } catch (const std::exception &e) {
         error_ = e.what();

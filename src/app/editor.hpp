@@ -14,6 +14,7 @@ class Editor {
     void drop(const std::filesystem::path &);
     void request_close();
     void set_demo();
+    void start_workspace(std::string_view name);
     bool fullscreen() const { return fullscreen_; }
     void set_fullscreen(bool value) { fullscreen_ = value; }
     void set_status(std::string message) { status_ = std::move(message); }
@@ -23,6 +24,17 @@ class Editor {
     Workspace workspace_{Workspace::Draw};
     bool guidance_{true}, advanced_panels_{}, fullscreen_{};
     void choose_workspace(Workspace);
+    struct PanelRect {
+        float x{}, y{}, width{}, height{};
+    };
+    PanelRect paint_rect_, canvas_rect_, inspector_rect_, timeline_rect_;
+    bool force_layout_{};
+    int fit_countdown_{3};
+    void guided_workspace();
+    void selection_inspector();
+    void place_panel(const PanelRect &);
+    const char *tool_label() const;
+    void new_project();
     enum class Tool {
         Pencil,
         Eraser,
@@ -79,8 +91,8 @@ class Editor {
     Tile selected_tile_{};
     bool tile_selected_{}, edit_linked_tiles_{true}, tile_edit_stroke_{};
     int selected_tile_x_{}, selected_tile_y_{};
-    void tiles();
-    void brush_controls();
+    void tiles(bool embedded = false);
+    void brush_controls(bool embedded = false);
     void transform_captured_brush(BrushTransform);
     void edit_selected_tile(const Tile &);
     void changed();
@@ -90,15 +102,15 @@ class Editor {
     void save(bool as = false);
     void refresh_textures();
     void menus();
-    void tools();
-    void palettes();
+    void tools(bool embedded = false);
+    void palettes(bool embedded = false);
     void canvas();
-    void layers();
+    void layers(bool embedded = false);
     void preview();
     void timeline();
-    void hardware();
+    void hardware(bool embedded = false);
     void attributes();
-    void sprite_sheet();
+    void sprite_sheet(bool embedded = false);
     void palette_effect();
     void popups();
     void copy_selection(bool cut = false);

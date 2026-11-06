@@ -28,9 +28,10 @@ void Editor::transform_captured_brush(BrushTransform transform) {
     tool_ = Tool::Stamp;
     status_ = "Brush transformed; paint on the canvas to stamp it";
 }
-void Editor::brush_controls() {
-    if (!ImGui::Begin("Brush")) {
-        ImGui::End();
+void Editor::brush_controls(bool embedded) {
+    if (!embedded && !ImGui::Begin("Brush")) {
+        if (!embedded)
+            ImGui::End();
         return;
     }
     if (clipboard_.empty())
@@ -89,7 +90,8 @@ void Editor::brush_controls() {
         if (ImGui::Button("Deselect"))
             selection_ = {};
     }
-    ImGui::End();
+    if (!embedded)
+        ImGui::End();
 }
 void Editor::edit_selected_tile(const Tile &replacement) {
     std::size_t count = 1;
@@ -107,13 +109,14 @@ void Editor::edit_selected_tile(const Tile &replacement) {
     } else
         status_ = "Edited the tile brush; paint it into the map with T";
 }
-void Editor::tiles() {
-    if (!ImGui::Begin("Tiles")) {
-        ImGui::End();
+void Editor::tiles(bool embedded) {
+    if (!embedded && !ImGui::Begin("Tiles")) {
+        if (!embedded)
+            ImGui::End();
         return;
     }
     ImGui::Text("Background CHR: %zu / 256 patterns", tile_catalog_.size());
-    ImGui::TextUnformatted("Choose a tile; T paints, right-click picks");
+    ImGui::TextWrapped("Pick a tile; paint with T. Right-click the map to pick an existing tile.");
     ImGui::BeginChild("tile-catalog", {0, 155}, true);
     int columns = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / 40));
     int rows = static_cast<int>((tile_catalog_.size() + columns - 1) / columns);
@@ -198,6 +201,7 @@ void Editor::tiles() {
     } else
         ImGui::TextWrapped(
             "Pick a map tile to edit it here, or right-click the canvas with T selected.");
-    ImGui::End();
+    if (!embedded)
+        ImGui::End();
 }
 } // namespace tzj
