@@ -9,6 +9,13 @@
 #include <iostream>
 #include <tuple>
 namespace tzj {
+static void focus_panel(const char *name) {
+    if (auto *window = ImGui::FindWindowByName(name)) {
+        if (window->DockNode && window->DockNode->TabBar)
+            window->DockNode->TabBar->NextSelectedTabId = window->TabId;
+        ImGui::SetWindowFocus(name);
+    }
+}
 static ImVec4 color(Byte index) {
     auto c = nes_colors.at(index);
     return {c.r / 255.f, c.g / 255.f, c.b / 255.f, 1};
@@ -60,6 +67,9 @@ void Editor::request_close() {
 }
 void Editor::set_demo() {
     project = demo_project();
+    selected_tile_ = read_tile(project, 0, 0, 0);
+    tile_selected_ = true;
+    selected_tile_x_ = selected_tile_y_ = 0;
     history_.clear();
     frame_ = 0;
     layer_ = -1;
@@ -76,6 +86,7 @@ void Editor::open(const std::filesystem::path &path) {
     history_.clear();
     dirty_ = false;
     refresh_ = true;
+    tile_selected_ = false;
     status_ = "Opened " + path_to_utf8(path.filename());
 }
 void Editor::drop(const std::filesystem::path &path) {
@@ -197,6 +208,14 @@ void Editor::refresh_textures() {
         compiled_.reset();
         compile_error_ = e.what();
     }
+    tile_catalog_ = tile_catalog(project, frame_);
+    if (tile_selected_ &&
+        std::none_of(tile_catalog_.begin(), tile_catalog_.end(),
+                     [this](const auto &entry) { return entry.pixels == selected_tile_; })) {
+        selected_tile_x_ = std::clamp(selected_tile_x_, 0, project.width / 8 - 1);
+        selected_tile_y_ = std::clamp(selected_tile_y_, 0, project.height / 8 - 1);
+        selected_tile_ = read_tile(project, frame_, selected_tile_x_, selected_tile_y_);
+    }
     refresh_ = false;
 }
 void Editor::dock_layout() {
@@ -216,10 +235,12 @@ void Editor::dock_layout() {
     ImGui::DockBuilderSplitNode(left, ImGuiDir_Up, 0.42f, &left_top, &left);
     ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.50f, &right_top, &right);
     ImGui::DockBuilderDockWindow("Tools", left_top);
+    ImGui::DockBuilderDockWindow("Brush", left_top);
     ImGui::DockBuilderDockWindow("Palettes", left);
     ImGui::DockBuilderDockWindow("Canvas", center);
     ImGui::DockBuilderDockWindow("Timeline", bottom);
     ImGui::DockBuilderDockWindow("Layers & sprites", right_top);
+    ImGui::DockBuilderDockWindow("Tiles", right_top);
     ImGui::DockBuilderDockWindow("Hardware", right);
     ImGui::DockBuilderDockWindow("Preview", right);
     ImGui::DockBuilderDockWindow("Attributes", right);
@@ -301,7 +322,7 @@ void Editor::menus() {
             ImGui::TextUnformatted("tilezeitjobb 2.0 - NES pixel and tile studio");
             ImGui::Separator();
             ImGui::TextUnformatted("P pencil  E eraser  F fill  A attributes  I picker");
-            ImGui::TextUnformatted("S sprite  M move sprite  R select  V stamp  H pan");
+            ImGui::TextUnformatted("S sprite  M move  R select  V stamp  T tile  H pan");
             ImGui::TextUnformatted("1..4 color slot  [ / ] brush size");
             ImGui::TextUnformatted("Middle drag pans; mouse wheel zooms.");
             ImGui::TextUnformatted("ROM export uses the current frame and initial viewport.");
@@ -362,6 +383,7 @@ void Editor::menus() {
                           {ImGuiKey_M, Tool::Move},
                           {ImGuiKey_R, Tool::Select},
                           {ImGuiKey_V, Tool::Stamp},
+                          {ImGuiKey_T, Tool::TileBrush},
                           {ImGuiKey_H, Tool::Pan}})
         if (ImGui::IsKeyPressed(key))
             tool_ = t;
@@ -387,11 +409,17 @@ void Editor::tools() {
                            {"Move  M", Tool::Move},
                            {"Select  R", Tool::Select},
                            {"Stamp  V", Tool::Stamp},
+                           {"Tile  T", Tool::TileBrush},
                            {"Pan  H", Tool::Pan}}) {
         if (i++ % 2)
             ImGui::SameLine();
-        if (ImGui::Selectable(name, tool_ == t, 0, {108, 25}))
+        if (ImGui::Selectable(name, tool_ == t, 0, {108, 25})) {
             tool_ = t;
+            if (t == Tool::TileBrush || t == Tool::Stamp || t == Tool::Palette) {
+                layer_ = -1;
+                palette_group_ = 0;
+            }
+        }
     }
     ImGui::Separator();
     ImGui::TextUnformatted("BRUSH");
@@ -420,18 +448,8 @@ void Editor::tools() {
     if (ImGui::Checkbox("Scanline preview", &pal_test_))
         refresh_ = true;
     ImGui::Separator();
-    if (!clipboard_.empty()) {
-        if (ImGui::Button("Flip brush X"))
-            for (int y = 0; y < clip_height_; ++y)
-                std::reverse(clipboard_.begin() + y * clip_width_,
-                             clipboard_.begin() + (y + 1) * clip_width_);
-        ImGui::SameLine();
-        if (ImGui::Button("Flip brush Y"))
-            for (int y = 0; y < clip_height_ / 2; ++y)
-                for (int x = 0; x < clip_width_; ++x)
-                    std::swap(clipboard_[y * clip_width_ + x],
-                              clipboard_[(clip_height_ - 1 - y) * clip_width_ + x]);
-    }
+    if (!clipboard_.empty() && ImGui::Button("Brush options..."))
+        focus_panel("Brush");
     if (selection_.width > 0 && ImGui::Button("Clear selection"))
         selection_ = {};
     ImGui::TextWrapped("%s", status_.c_str());
@@ -446,9 +464,10 @@ void Editor::palettes() {
         auto &palettes = group ? project.sprite_palettes : project.background;
         for (int row = 0; row < 4; ++row) {
             ImGui::PushID(row);
-            bool active = palette_ == row && ((layer_ >= 0) == (group == 1));
+            bool active = palette_ == row && palette_group_ == group;
             if (ImGui::RadioButton("##palette", active)) {
                 palette_ = row;
+                palette_group_ = group;
                 if (group == 0)
                     layer_ = -1;
             }
@@ -458,6 +477,7 @@ void Editor::palettes() {
                 if (ImGui::ColorButton("##color", color(palettes[row][c]),
                                        ImGuiColorEditFlags_NoTooltip, {32, 25})) {
                     palette_ = row;
+                    palette_group_ = group;
                     slot_ = c;
                     if (group == 0)
                         layer_ = -1;
@@ -493,7 +513,8 @@ void Editor::palettes() {
         ImGui::PopID();
     }
     ImGui::Separator();
-    ImGui::Text("Active: palette %d / slot %d", palette_, slot_);
+    ImGui::Text("%s palette %d / slot %d", palette_group_ ? "Sprite" : "Background", palette_,
+                slot_);
     for (int c = 0; c < 4; ++c) {
         if (c)
             ImGui::SameLine();
@@ -503,6 +524,37 @@ void Editor::palettes() {
             slot_ = c;
     }
     ImGui::Separator();
+    if (ImGui::CollapsingHeader("Palette operations")) {
+        const char *slots[]{"1", "2", "3"};
+        int a = swap_first_ - 1, b = swap_second_ - 1;
+        ImGui::SetNextItemWidth(65);
+        if (ImGui::Combo("First", &a, slots, 3))
+            swap_first_ = a + 1;
+        ImGui::SetNextItemWidth(65);
+        if (ImGui::Combo("Second", &b, slots, 3))
+            swap_second_ = b + 1;
+        ImGui::Checkbox("Preserve existing artwork", &preserve_palette_art_);
+        if (ImGui::Button("Swap slots")) {
+            checkpoint();
+            swap_palette_slots(project, palette_group_ == 1, palette_, swap_first_, swap_second_,
+                               preserve_palette_art_);
+            changed();
+        }
+        auto &palettes = palette_group_ ? project.sprite_palettes : project.background;
+        if (ImGui::Button("Copy colors"))
+            copied_palette_ = palettes[palette_];
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!copied_palette_);
+        if (ImGui::Button("Paste colors")) {
+            checkpoint();
+            for (int i = 1; i < 4; ++i)
+                palettes[palette_][i] = (*copied_palette_)[i];
+            changed();
+        }
+        ImGui::EndDisabled();
+        ImGui::TextWrapped("Swap preserves artwork across all frames by remapping pixels. Slot "
+                           "zero remains the NES backdrop/transparency.");
+    }
     ImGui::TextUnformatted("IMAGE CONVERSION");
     bool dithering = project.dither;
     if (ImGui::Checkbox("Ordered dithering", &dithering)) {
@@ -544,7 +596,9 @@ void Editor::copy_selection(bool cut) {
         return;
     clip_width_ = selection_.width;
     clip_height_ = selection_.height;
-    clipboard_.resize(clip_width_ * clip_height_);
+    clipboard_ =
+        capture_brush(project, frame_, selection_.x, selection_.y, clip_width_, clip_height_)
+            .pixels;
     auto &f = project.frames[frame_];
     if (cut) {
         checkpoint();
@@ -567,6 +621,25 @@ void Editor::copy_selection(bool cut) {
 void Editor::apply_tool(int x, int y, bool first, bool right) {
     auto &f = project.frames[frame_];
     Byte paint = Byte(right ? 0 : slot_);
+    if (tool_ == Tool::TileBrush) {
+        if (right || ImGui::GetIO().KeyAlt) {
+            selected_tile_ = read_tile(project, frame_, x / 8, y / 8);
+            tile_selected_ = true;
+            selected_tile_x_ = x / 8;
+            selected_tile_y_ = y / 8;
+            palette_ = f.attributes[(y / 16) * project.block_width() + x / 16];
+            palette_group_ = 0;
+            layer_ = -1;
+            status_ = "Picked tile; left-drag paints it on the map";
+        } else if (tile_selected_) {
+            paint_tile_line(project, frame_, first ? x / 8 : last_x_ / 8,
+                            first ? y / 8 : last_y_ / 8, x / 8, y / 8, selected_tile_);
+            layer_ = -1;
+            changed();
+        } else
+            status_ = "Choose a pattern in Tiles, or right-click a map tile";
+        return;
+    }
     if (tool_ == Tool::Picker) {
         palette_ = f.attributes[(y / 16) * project.block_width() + x / 16];
         slot_ = f.pixels[y * project.width + x];
@@ -619,16 +692,10 @@ void Editor::apply_tool(int x, int y, bool first, bool right) {
         return;
     }
     if (tool_ == Tool::Stamp) {
-        if (first && !clipboard_.empty()) {
-            if (f.paint_mask.empty())
-                f.paint_mask.assign(f.pixels.size(), 255);
-            for (int cy = 0; cy < clip_height_; ++cy)
-                for (int cx = 0; cx < clip_width_; ++cx)
-                    if (x + cx < project.width && y + cy < project.height) {
-                        auto i = (y + cy) * project.width + x + cx;
-                        f.pixels[i] = clipboard_[cy * clip_width_ + cx];
-                        f.paint_mask[i] = f.pixels[i];
-                    }
+        if (!clipboard_.empty() && (first || x != last_x_ || y != last_y_)) {
+            int sx = brush_snap_ ? (x / 8) * 8 : x, sy = brush_snap_ ? (y / 8) * 8 : y;
+            stamp_brush(project, frame_, sx, sy, {clip_width_, clip_height_, clipboard_},
+                        brush_transparent_, brush_wrap_);
             changed();
         }
         return;
@@ -718,9 +785,20 @@ void Editor::canvas() {
     if (hover) {
         int x = std::clamp(int((io.MousePos.x - origin.x) / zoom_), 0, project.width - 1),
             y = std::clamp(int((io.MousePos.y - origin.y) / zoom_), 0, project.height - 1);
-        draw->AddRect({origin.x + x * zoom_, origin.y + y * zoom_},
-                      {origin.x + (x + brush_) * zoom_, origin.y + (y + brush_) * zoom_},
-                      IM_COL32(240, 240, 240, 180));
+        int cursor_x =
+            tool_ == Tool::TileBrush || (tool_ == Tool::Stamp && brush_snap_) ? (x / 8) * 8 : x;
+        int cursor_y =
+            tool_ == Tool::TileBrush || (tool_ == Tool::Stamp && brush_snap_) ? (y / 8) * 8 : y;
+        int cursor_w = tool_ == Tool::TileBrush                      ? 8
+                       : tool_ == Tool::Stamp && !clipboard_.empty() ? clip_width_
+                                                                     : brush_;
+        int cursor_h = tool_ == Tool::TileBrush                      ? 8
+                       : tool_ == Tool::Stamp && !clipboard_.empty() ? clip_height_
+                                                                     : brush_;
+        draw->AddRect(
+            {origin.x + cursor_x * zoom_, origin.y + cursor_y * zoom_},
+            {origin.x + (cursor_x + cursor_w) * zoom_, origin.y + (cursor_y + cursor_h) * zoom_},
+            IM_COL32(240, 240, 240, 180));
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
             (tool_ == Tool::Pan && ImGui::IsMouseDragging(ImGuiMouseButton_Left))) {
             ImGui::SetScrollX(ImGui::GetScrollX() - io.MouseDelta.x);
@@ -731,7 +809,8 @@ void Editor::canvas() {
                 stroke_ = true;
                 start_x_ = last_x_ = x;
                 start_y_ = last_y_ = y;
-                if (tool_ != Tool::Picker && tool_ != Tool::Select && tool_ != Tool::Pan)
+                if (tool_ != Tool::Picker && tool_ != Tool::Select && tool_ != Tool::Pan &&
+                    !(tool_ == Tool::TileBrush && (io.KeyAlt || ImGui::IsMouseDown(1))))
                     checkpoint();
             }
             if (stroke_ && (ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1))) {
@@ -768,6 +847,7 @@ void Editor::layers() {
         if (ImGui::Selectable(f.sprites[i].name.c_str(), layer_ == static_cast<int>(i))) {
             layer_ = static_cast<int>(i);
             palette_ = f.sprites[i].palette;
+            palette_group_ = 1;
         }
         ImGui::PopID();
     }
@@ -1268,6 +1348,8 @@ void Editor::watch_sources() {
 }
 bool Editor::tick() {
     try {
+        if (!ImGui::IsMouseDown(0) && !ImGui::IsMouseDown(1))
+            tile_edit_stroke_ = false;
         watch_sources();
         if (selection_.x + selection_.width > project.width ||
             selection_.y + selection_.height > project.height)
@@ -1292,7 +1374,15 @@ bool Editor::tick() {
         hardware();
         attributes();
         sprite_sheet();
+        tiles();
+        brush_controls();
         palette_effect();
+        if (focus_workflows_) {
+            focus_panel("Tools");
+            focus_panel("Tiles");
+            focus_panel("Hardware");
+            focus_workflows_ = false;
+        }
         popups();
     } catch (const std::exception &e) {
         error_ = e.what();

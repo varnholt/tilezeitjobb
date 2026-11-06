@@ -1,0 +1,31 @@
+#pragma once
+#include "core/project.hpp"
+#include <utility>
+
+namespace tzj {
+struct TileEntry {
+    Tile pixels{};
+    std::vector<std::pair<int, int>> locations;
+};
+// Identical bit patterns share an exported CHR tile regardless of display palette.
+std::vector<TileEntry> tile_catalog(const Project &, std::size_t frame);
+Tile read_tile(const Project &, std::size_t frame, int tx, int ty);
+void stamp_tile(Project &, std::size_t frame, int tx, int ty, const Tile &);
+std::size_t replace_tile(Project &, std::size_t frame, const Tile &original,
+                         const Tile &replacement);
+void paint_tile_line(Project &, std::size_t frame, int tx0, int ty0, int tx1, int ty1,
+                     const Tile &);
+struct IndexedBrush {
+    int width{}, height{};
+    std::vector<Byte> pixels;
+    bool operator==(const IndexedBrush &) const = default;
+};
+enum class BrushTransform { FlipX, FlipY, RotateCW, RotateCCW };
+IndexedBrush capture_brush(const Project &, std::size_t frame, int x, int y, int width, int height);
+IndexedBrush transform_brush(const IndexedBrush &, BrushTransform);
+void stamp_brush(Project &, std::size_t frame, int x, int y, const IndexedBrush &,
+                 bool transparent_zero = false, bool wrap = false);
+// Only slots 1..3 may be reordered: slot zero is backdrop/transparency on NES.
+void swap_palette_slots(Project &, bool sprites, int palette, int first, int second,
+                        bool preserve_artwork = true);
+} // namespace tzj

@@ -5,7 +5,7 @@ import {pathToFileURL} from 'node:url';
 const modulePath=process.argv[2]??'build/emulator/node_modules/jsnes/src/index.js';
 const output=process.argv[3]??'build/test-output';
 const {NES}=await import(pathToFileURL(path.resolve(modulePath)));
-for(const name of ['demo','sprite','horizontal','vertical']) {
+for(const name of ['demo','sprite','horizontal','vertical','workflow']) {
   const base=path.join(output,name);
   const project=JSON.parse(fs.readFileSync(base+'.tzj','utf8'));
   const rom=fs.readFileSync(base+'.nes');

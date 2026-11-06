@@ -51,7 +51,7 @@ objects, sprite-sheet picker, preview, attribute grid, hardware report and timel
 - The original animated palette-test patterns are available in the Palette test effect tab.
 
 Shortcuts: **P** pencil, **E** erase, **F** fill, **A** attributes, **I** pick,
-**S** sprite, **M** move sprite, **R** select, **V** captured brush, **H** pan;
+**S** sprite, **M** move sprite, **R** select, **V** captured brush, **T** tile brush, **H** pan;
 **1..4** select a color slot; **[ / ]** change brush size. Standard save, open,
 undo, redo, copy, cut, paste and export use Ctrl shortcuts shown in the menus.
 Selections and captured brushes store color-slot indices, so destination palettes
@@ -124,11 +124,12 @@ boot/render tests are included; physical hardware has not been tested.
 
 ## Verification
 
-The C++ test suite covers bitplane order, deduplication, attribute packing including
+The C++ test suites cover linked tile edits, brush transforms and wrapping, palette
+remapping, bitplane order, deduplication, attribute packing including
 the bottom row and second-screen boundary, OAM, ROM headers/vectors, project and PNG
 roundtrips, legacy import, undo/redo, quantization and hardware-limit rejection.
 
-An additional integration test boots four exported ROMs for 120 frames in pinned
+An additional integration test boots five exported ROMs for 120 frames in pinned
 JSNES 2.1.0, checks 61,184 rendered pixels per scene, and verifies every nametable
 byte. JSNES reserves framebuffer row zero for its pre-render dummy scanline; that
 row is excluded from the pixel comparison.
@@ -139,12 +140,46 @@ node tests/rom_emulator.mjs tests/emulator/node_modules/jsnes/src/index.js build
 .\build\Release\tilezeitjobb.exe --demo --smoke-test --screenshot build\editor.png
 ```
 
-## Next development
+## Pro Motion workflows selected for NES work
 
-This migration establishes an indexed, hardware-aware foundation. It is not full
-Pro Motion NG feature parity. Larger follow-ups include a shared tilemap editor,
-animation export, metasprites and 8x16 sprites, advanced selection transforms,
-custom drawing modes, banked mappers, game-runtime integration and hardware testing.
+The priorities come from [Pro Motion NG's documented features](https://www.cosmigo.com/pixel_animation_software),
+especially tile maps, captured brushes and indexed palette editing.
+
+| Priority | Workflow | Status |
+| --- | --- | --- |
+| 1 | Edit shared tiles in place and paint tile maps | Implemented in **Tiles** and the **T** tool |
+| 2 | Captured brush transforms, transparency and seamless drawing | Implemented in **Brush** |
+| 3 | Palette reordering while preserving artwork | Implemented under **Palettes > Palette operations** |
+| 4 | X/Y symmetry, pixel-perfect strokes and shape tools | Next drawing workflow |
+| 5 | Richer onion skin, animation editing, sprite-sheet and animated ROM export | Next animation workflow |
+| 6 | Metasprites, 8x16 sprites and reusable animation assets | Follow-up NES workflow |
+
+**Tiles:** the catalog lists unique 8x8 background patterns in current export order,
+including each pattern's map usage count. Select a pattern, then **T** paints it
+on an 8x8 grid. Right-click or Alt-click picks a pattern from the map. Edit the
+large tile grid to update all identical patterns in the current frame, or disable
+Edit all identical map tiles to change only its picked map location. Each 16x16
+region retains its palette. Identical patterns automatically merge, and unused
+patterns disappear from the catalog; the catalog is derived from the map rather
+than a separate library of unplaced assets. Tile edits support undo and survive
+source-image reloads. More than 256 patterns still blocks NROM export.
+
+**Brush:** capture a rectangular selection with Ctrl+C or the Capture button. Rotate
+it in exact 90-degree steps, flip it, and paint with **V**. Slot-zero transparency,
+8x8 snapping and wrapping across canvas edges are independent options. These brushes
+are temporary editing tools, like the clipboard; save their artwork in the project
+before closing. Canvas regions keep their own palettes when a brush is pasted.
+
+**Palette operations:** choose a background or sprite palette, then swap slots 1..3.
+Preserve existing artwork remaps matching pixels, sprite patterns and paint overrides
+across **all frames**, keeping the rendered image unchanged. Without that option,
+the same operation recolors the artwork. Copy/Paste colors transfers the three
+nonzero entries between subpalettes. Slot zero stays reserved for the universal
+background/sprite transparency. Preserving appearance can split formerly shared
+patterns when only one subpalette is reordered; the tile count updates accordingly.
+
+The editor is not full Pro Motion NG feature parity. Banked mappers, animated ROM
+playback and physical hardware testing also remain follow-up work.
 
 ## License
 

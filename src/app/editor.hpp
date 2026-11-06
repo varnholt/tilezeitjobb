@@ -1,5 +1,6 @@
 #pragma once
 #include "core/nes.hpp"
+#include "core/tools.hpp"
 #include <functional>
 #include <optional>
 namespace tzj {
@@ -16,7 +17,19 @@ class Editor {
     void set_status(std::string message) { status_ = std::move(message); }
 
   private:
-    enum class Tool { Pencil, Eraser, Fill, Palette, Picker, Sprite, Move, Select, Stamp, Pan };
+    enum class Tool {
+        Pencil,
+        Eraser,
+        Fill,
+        Palette,
+        Picker,
+        Sprite,
+        Move,
+        Select,
+        Stamp,
+        TileBrush,
+        Pan
+    };
     enum class FileAction { None, Open, Save, Background, Sprites, Export, Png };
     History history_;
     std::size_t frame_{};
@@ -25,7 +38,7 @@ class Editor {
     Tool tool_{Tool::Pencil};
     bool dirty_{}, refresh_{true}, quit_{}, stroke_{}, playing_{}, show_sprites_{true},
         hardware_preview_{}, onion_{}, highlight_{}, reference_overlay_{}, pal_test_{};
-    bool layout_built_{};
+    bool layout_built_{}, focus_workflows_{true};
     bool watch_sources_{true};
     double next_watch_{};
     std::filesystem::path watched_background_, watched_sprites_;
@@ -52,6 +65,18 @@ class Editor {
     Selection selection_;
     std::vector<Byte> clipboard_;
     int clip_width_{}, clip_height_{};
+    bool brush_transparent_{true}, brush_wrap_{}, brush_snap_{};
+    int palette_group_{}, swap_first_{1}, swap_second_{2};
+    bool preserve_palette_art_{true};
+    std::optional<Palette> copied_palette_;
+    std::vector<TileEntry> tile_catalog_;
+    Tile selected_tile_{};
+    bool tile_selected_{}, edit_linked_tiles_{true}, tile_edit_stroke_{};
+    int selected_tile_x_{}, selected_tile_y_{};
+    void tiles();
+    void brush_controls();
+    void transform_captured_brush(BrushTransform);
+    void edit_selected_tile(const Tile &);
     void changed();
     void checkpoint();
     void guard(std::function<void()>);
