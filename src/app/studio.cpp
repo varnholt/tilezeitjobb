@@ -78,7 +78,7 @@ void Editor::group_properties() {
     char name[129];
     std::snprintf(name, sizeof(name), "%s", selected->name.c_str());
     ImGui::SetNextItemWidth(std::max(100.f, ImGui::GetContentRegionAvail().x - 126));
-    if (ui::InputText("Character name", name, sizeof(name)) && name[0]) {
+    if (ui::InputText("Name", name, sizeof(name)) && name[0]) {
         checkpoint();
         auto &groups = project.frames[frame_].groups;
         std::ranges::find(groups, group_, &Metasprite::id)->name = name;
@@ -347,6 +347,8 @@ void Editor::tilemap_window() {
             }
             ImGui::EndCombo();
         }
+        ui::help("Metatile",
+                 "Choose a saved 16x16 block to edit or place with the tile-map brush.");
         if (map_metatile_ >= 0 && map_metatile_ < int(project.metatiles.size())) {
             auto &m = project.metatiles[map_metatile_];
             char name[129];
@@ -397,6 +399,10 @@ void Editor::tilemap_window() {
                     m.tiles[i] = std::clamp(ids[i], -1, int(project.tiles.size()) - 1);
                 changed();
             }
+            ui::help("Metatile tile IDs",
+                     "Library tile IDs for top-left, top-right, bottom-left and bottom-right. -1 "
+                     "means transparent. You can also click the preview quadrants to assign the "
+                     "selected tile.");
             int pal = m.palette;
             if (ui::SliderInt("Metatile color set", &pal, 0, 3)) {
                 checkpoint();
