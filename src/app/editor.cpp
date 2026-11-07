@@ -136,7 +136,8 @@ void Editor::browser_file(const std::filesystem::path &path, int action) {
 void Editor::file_dialog(FileAction action) {
 #ifdef __EMSCRIPTEN__
     if (action == FileAction::Open || action == FileAction::Background ||
-        action == FileAction::Sprites) {
+        action == FileAction::Sprites || action == FileAction::Brushes ||
+        action == FileAction::FontSheet) {
         browser_pick(std::to_underlying(action));
         return;
     }
@@ -219,6 +220,30 @@ void Editor::perform_file(const std::filesystem::path &path) {
             tile_x_ = tile_y_ = 0;
             changed();
             status_ = "Imported sprite sheet";
+            break;
+        }
+        case FileAction::Brushes: {
+            auto imported = load_project(path);
+            auto candidate = project;
+            candidate.brushes.insert(candidate.brushes.end(), imported.brushes.begin(),
+                                     imported.brushes.end());
+            candidate.ramps.insert(candidate.ramps.end(), imported.ramps.begin(),
+                                   imported.ramps.end());
+            candidate.validate();
+            checkpoint();
+            project = std::move(candidate);
+            library_selection_ = -1;
+            changed();
+            status_ = "Imported saved brushes and color sets.";
+            break;
+        }
+        case FileAction::FontSheet: {
+            auto font =
+                font_from_sheet(load_image(path), (palette_group_ ? project.sprite_palettes
+                                                                  : project.background)[palette_]);
+            checkpoint();
+            project.font = std::move(font);
+            changed();
             break;
         }
         case FileAction::Export: {
@@ -337,7 +362,7 @@ void Editor::palette_editor() {
 void Editor::refresh_textures() {
     if (!refresh_)
         return;
-    auto image = project.render(frame_, show_sprites_, hardware_preview_);
+    auto image = project.render(frame_, show_sprites_, hardware_preview_, true);
     if (pal_test_)
         for (int y = 1; y < image.height; y += 2)
             for (int x = 0; x < image.width; ++x)
@@ -347,8 +372,9 @@ void Editor::refresh_textures() {
     upload(texture_, image);
     upload(sheet_texture_, project.sprite_sheet);
     upload(reference_texture_, project.reference);
-    if (frame_ > 0)
-        upload(previous_texture_, project.render(frame_ - 1));
+    if (onion_)
+        upload(previous_texture_, onion_overlay(project, frame_, onion_previous_, onion_following_,
+                                                onion_opacity_, onion_sprites_only_));
     else {
         Image empty;
         upload(previous_texture_, empty);
@@ -450,6 +476,8 @@ void Editor::menus() {
                 file_dialog(FileAction::Background);
             if (ui::MenuItem("Import sprite sheet..."))
                 file_dialog(FileAction::Sprites);
+            if (ui::MenuItem("Import brushes and color sets..."))
+                file_dialog(FileAction::Brushes);
             ImGui::Separator();
             if (ui::MenuItem("Export NES ROM + assets...", "Ctrl+E"))
                 file_dialog(FileAction::Export);
@@ -581,7 +609,7 @@ void Editor::menus() {
         }
         if (ImGui::BeginMenu("View")) {
             ui::MenuItem("Fullscreen", "F11", &fullscreen_);
-            ui::MenuItem("Workflow guidance", nullptr, &guidance_);
+            ui::MenuItem("Compact color sets", nullptr, &guidance_);
             ui::MenuItem("Scene preview", nullptr, &show_scene_preview_);
             ui::MenuItem("Brush settings", nullptr, &show_brush_settings_);
             ui::MenuItem("Tile editor", nullptr, &show_tiles_);
@@ -589,22 +617,29 @@ void Editor::menus() {
                 playing_ = false;
             ui::MenuItem("NES limits", nullptr, &show_hardware_);
             ui::MenuItem("NES preview", nullptr, &show_emulator_);
+            if (ui::MenuItem("Onion skin", nullptr, &onion_))
+                refresh_ = true;
+            ui::MenuItem("Onion skin settings...", nullptr, &show_onion_settings_);
             if (ui::MenuItem("Advanced layout", nullptr, &advanced_panels_)) {
                 layout_built_ = false;
                 force_layout_ = true;
             }
             ImGui::EndMenu();
         }
-#ifndef __EMSCRIPTEN__
         if (ImGui::BeginMenu("Tools")) {
+            ui::MenuItem("Brush library", nullptr, &show_brush_library_);
+            ui::MenuItem("Bitmap text", nullptr, &show_bitmap_text_);
+            ui::MenuItem("Gradient fill", nullptr, &show_gradients_);
+#ifndef __EMSCRIPTEN__
+            ImGui::Separator();
             if (ui::MenuItem("MCP server...", nullptr, mcp_server_ && mcp_server_->running()))
                 show_mcp_ = true;
             ui::help("MCP server",
                      "Start or stop a local MCP connection to this editor. Connected clients can "
                      "inspect, edit, preview and export the open artwork.");
+#endif
             ImGui::EndMenu();
         }
-#endif
         if (ImGui::BeginMenu("Help")) {
             if (ui::MenuItem("Drawing guide"))
                 show_drawing_guide_ = true;
@@ -786,14 +821,24 @@ void Editor::tools(bool embedded) {
         ui::SeparatorText("Symmetry");
         ui::Checkbox("Mirror left / right", &mirror_x_);
         ui::Checkbox("Mirror top / bottom", &mirror_y_);
-        ui::TextDisabled(layer_ >= 0 ? "Around sprite center" : "Around canvas center");
+        if (ui::CollapsingHeader("Symmetry settings")) {
+            ui::Checkbox("Custom center", &custom_symmetry_);
+            if (custom_symmetry_) {
+                ui::SliderFloat("Center X", &symmetry_x_, 0,
+                                float(layer_ >= 0 ? 7 : project.width - 1), "%.1f");
+                ui::SliderFloat("Center Y", &symmetry_y_, 0,
+                                float(layer_ >= 0 ? 7 : project.height - 1), "%.1f");
+            }
+            ui::SliderInt("Radial copies", &symmetry_sectors_, 1, 16);
+        }
     }
     if (ui::CollapsingHeader("Canvas options", embedded ? 0 : ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ui::Checkbox("Show sprites", &show_sprites_))
             refresh_ = true;
         if (ui::Checkbox("Preview sprite limits", &hardware_preview_))
             refresh_ = true;
-        ui::Checkbox("Onion skin", &onion_);
+        if (ui::Checkbox("Onion skin", &onion_))
+            refresh_ = true;
         ui::Checkbox("Highlight active color set", &highlight_);
         ui::Checkbox("Reference overlay", &reference_overlay_);
         if (ui::Checkbox("Scanlines", &pal_test_))
@@ -1108,9 +1153,11 @@ std::vector<PixelPoint> Editor::stroke_pixels(int x0, int y0, int x1, int y1,
         y1 -= sprite.y;
         width = height = 8;
     }
-    return drawing_pixels(shape, x0, y0, x1, y1, width, height,
-                          shape != DrawingShape::Line && shape_filled_, brush_, mirror_x_,
-                          mirror_y_);
+    return symmetric_pixels(drawing_pixels(shape, x0, y0, x1, y1, width, height,
+                                           shape != DrawingShape::Line && shape_filled_, brush_),
+                            width, height, custom_symmetry_ ? symmetry_x_ : (width - 1) * .5f,
+                            custom_symmetry_ ? symmetry_y_ : (height - 1) * .5f, mirror_x_,
+                            mirror_y_, symmetry_sectors_);
 }
 bool Editor::path_tool() const {
     return tool_ == Tool::Polyline || tool_ == Tool::Polygon;
@@ -1131,8 +1178,11 @@ std::vector<PixelPoint> Editor::path_preview(const std::vector<PixelPoint> &worl
         }
         width = height = 8;
     }
-    return path_pixels(points, width, height, tool_ == Tool::Polygon,
-                       tool_ == Tool::Polygon && shape_filled_, brush_, mirror_x_, mirror_y_);
+    return symmetric_pixels(path_pixels(points, width, height, tool_ == Tool::Polygon,
+                                        tool_ == Tool::Polygon && shape_filled_, brush_),
+                            width, height, custom_symmetry_ ? symmetry_x_ : (width - 1) * .5f,
+                            custom_symmetry_ ? symmetry_y_ : (height - 1) * .5f, mirror_x_,
+                            mirror_y_, symmetry_sectors_);
 }
 void Editor::finish_path() {
     if (path_.size() >= (tool_ == Tool::Polygon ? 3u : 2u)) {
@@ -1159,7 +1209,8 @@ void Editor::canvas() {
                  advanced_panels_
                      ? 0
                      : ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking);
+                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                           ImGuiWindowFlags_NoBringToFrontOnFocus);
     ui::Text(
         "%s | %s", tool_label(),
         layer_ >= 0
@@ -1205,7 +1256,7 @@ void Editor::canvas() {
     if (onion_ && previous_texture_)
         draw->AddImage(texture_id(previous_texture_), origin,
                        {origin.x + size.x, origin.y + size.y}, {0, 0}, {1, 1},
-                       IM_COL32(255, 255, 255, 65));
+                       IM_COL32(255, 255, 255, 255));
     if (reference_overlay_ && reference_texture_)
         draw->AddImage(texture_id(reference_texture_),
                        {origin.x + project.offset_x * zoom_, origin.y + project.offset_y * zoom_},
@@ -1399,7 +1450,7 @@ void Editor::canvas() {
                                 ImGui::ColorConvertFloat4ToU32(color(index)));
         }
     }
-    if (mirror_x_ || mirror_y_) {
+    if (mirror_x_ || mirror_y_ || symmetry_sectors_ > 1) {
         float ox = 0, oy = 0, w = float(project.width), h = float(project.height);
         if (layer_ >= 0) {
             const auto &s = project.frames[frame_].sprites.at(layer_);
@@ -1407,14 +1458,18 @@ void Editor::canvas() {
             oy = float(s.y);
             w = h = 8;
         }
+        float cx = custom_symmetry_ ? symmetry_x_ + .5f : w / 2,
+              cy = custom_symmetry_ ? symmetry_y_ + .5f : h / 2;
         if (mirror_x_)
-            draw->AddLine({origin.x + (ox + w / 2) * zoom_, origin.y + oy * zoom_},
-                          {origin.x + (ox + w / 2) * zoom_, origin.y + (oy + h) * zoom_},
+            draw->AddLine({origin.x + (ox + cx) * zoom_, origin.y + oy * zoom_},
+                          {origin.x + (ox + cx) * zoom_, origin.y + (oy + h) * zoom_},
                           IM_COL32(100, 220, 255, 150));
         if (mirror_y_)
-            draw->AddLine({origin.x + ox * zoom_, origin.y + (oy + h / 2) * zoom_},
-                          {origin.x + (ox + w) * zoom_, origin.y + (oy + h / 2) * zoom_},
+            draw->AddLine({origin.x + ox * zoom_, origin.y + (oy + cy) * zoom_},
+                          {origin.x + (ox + w) * zoom_, origin.y + (oy + cy) * zoom_},
                           IM_COL32(100, 220, 255, 150));
+        draw->AddCircle({origin.x + (ox + cx) * zoom_, origin.y + (oy + cy) * zoom_}, 4,
+                        IM_COL32(255, 205, 90, 220));
     }
     if (focus_sprite_ && layer_ >= 0) {
         const auto &s = project.frames[frame_].sprites.at(layer_);
@@ -1503,13 +1558,17 @@ void Editor::layers(bool embedded) {
         ImGui::End();
 }
 void Editor::preview(bool *open) {
-    if (!ImGui::Begin("Preview", open)) {
+    ImGui::SetNextWindowSize({300, 350}, ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Preview", open, ImGuiWindowFlags_HorizontalScrollbar)) {
         ImGui::End();
         return;
     }
+    ui::Checkbox("Native size (1:1)", &preview_native_size_);
     ImVec2 available = ImGui::GetContentRegionAvail();
     float scale =
         std::max(.1f, std::min(available.x / project.width, (available.y - 25) / project.height));
+    if (preview_native_size_)
+        scale = 1;
     ui::Image(texture_id(texture_), {project.width * scale, project.height * scale});
     ui::TextUnformatted("Nearest-neighbor / current frame");
     ImGui::End();
@@ -1521,7 +1580,8 @@ void Editor::timeline(bool *open) {
                  advanced_panels_
                      ? 0
                      : ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking);
+                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                           ImGuiWindowFlags_NoBringToFrontOnFocus);
     if (ui::Button(playing_ ? "Pause" : "Play")) {
         playing_ = !playing_;
         next_frame_ = ImGui::GetTime() + project.frames[frame_].duration_ms / 1000.;

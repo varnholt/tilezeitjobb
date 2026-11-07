@@ -23,6 +23,8 @@ The screenshots show STARFALL, the original space-shooter example included with 
 - sprite objects with per-object colors, position, visibility, flipping and background priority
 - frame editing, timed playback and onion skin; brush rotation, flipping, transparency and edge wrapping
 - image import, ordered dithering, automatic palette fitting and source-image watching that preserves background paint
+- saved brushes and tile groups, seamless pattern editing, editable bitmap fonts and indexed gradient fills
+- previous/following onion skins, adjustable mirror/radial symmetry and non-exported reference guides
 - direct NROM ROM export, plus CHR, nametables, palettes, OAM and C arrays for use in a game
 
 ## First picture
@@ -86,7 +88,34 @@ unused patterns disappear: the catalog is derived from the map, rather than a li
 
 Captured brushes rotate in exact 90-degree steps and flip horizontally or vertically. Slot-zero transparency, 8x8
 snapping and wrapping across canvas edges are independent options. Brushes store color-slot indices, so the
-receiving region supplies their colors. Captured brushes are temporary; save their artwork in the project.
+receiving region supplies their colors. **Tools → Brush library** stores named brushes and tile groups in the
+project. Save a selection, the captured brush or a selected sprite; use an 8x8 library entry to create a new sprite.
+Import brushes and saved color ramps from another `.tzj` project through File or the library window.
+
+**View → Tile editor** includes a seamless 3x3 pattern view. Draw across an edge to wrap the stroke into the
+8x8 tile; all repetitions update together. Linked editing remains optional, and a stroke is one undo step.
+
+### Text, gradients and animation guides
+
+| Tool | Use |
+|---|---|
+| **Tools → Bitmap text** | Enter printable ASCII text, adjust spacing and integer pixel scale, then use it as an indexed brush. Edit the project's 8x8 glyphs or import a font sheet. |
+| **Tools → Gradient fill** | Fill a selection or prepare a gradient brush using four ordered color slots, with solid, Bayer 4x4 or deterministic noise transitions. Save named NES color ramps for reuse. [Screenshot](docs/images/gradients.png). |
+| **View → Onion skin settings...** | Tint earlier frames green and later frames pink, with independent frame counts, distance-based opacity and an option to ghost only sprites. |
+| **Symmetry settings** beside the tools | Set a custom mirror center and up to 16 radial copies. Guides and live previews use the same geometry as the committed stroke. |
+| **View → Scene preview** | Keep a 1:1 overview beside the zoomed canvas, or turn off Native size to fit its window. |
+
+Bitmap fonts contain 96 row-major 8x8 cells, beginning with ASCII space. Imported sheets map to the selected
+NES color set. Alpha supplies transparency; fully opaque sheets use the top-left pixel as their background key.
+Stamped text becomes independent artwork; later font edits do not alter existing text.
+
+Gradient and brush pixels retain indexed slots. Destination attribute regions supply their colors, so they
+remain compatible with NES color limits. Saved color ramps can recolor the active set across all frames.
+
+| | |
+|---|---|
+| ![saved brush and tile-group library](docs/images/brushes.png) | ![bitmap text and editable font tools](docs/images/text.png) |
+| reusable assets stored with the project | bitmap lettering prepared as an indexed brush |
 
 Palette operations can swap nonzero slots while remapping background pixels, sprite patterns and paint overrides
 across all frames, preserving the rendered artwork. Slot zero remains the universal backdrop or sprite transparency.
@@ -109,6 +138,10 @@ the source layer remains available for other variants. Erasing paint reveals the
 
 Background layers share the scene's NES color sets and 16x16 attribute regions. Only visible artwork
 contributes to scene export. Layers and modifiers are saved in the project and participate in undo/redo.
+
+An image layer can be marked **Reference guide (not exported)**. Its original RGB pixels blend into the editing
+canvas with adjustable opacity, in layer order beneath sprites. Guides contribute no patterns or pixels to PNG
+artwork or NES export. Make a paintable copy to turn a guide's NES conversion into exported artwork.
 
 ## MCP connection
 
@@ -265,7 +298,7 @@ up to 32 snapshots with a 64 MiB history target.
 
 The original QSettings INI `.tzj` format is also accepted. Its referenced images must still exist; relative paths
 resolve beside the project. Legacy RGB colors are mapped to NES color codes, and image dimensions infer a two-screen
-layout. Check that layout after import, since the old project format did not store it. Saving writes version 3,
+layout. Check that layout after import, since the old project format did not store it. Saving writes version 4,
 which the original Qt application cannot read. Loading alone does not modify the original file.
 
 ## Tests
@@ -274,6 +307,7 @@ which the original Qt application cannot read. Loading alone does not modify the
 |---|---|
 | Core | CHR bitplanes, deduplication, attribute packing and screen boundaries, OAM, ROM headers/vectors, file roundtrips, legacy import and hardware-limit rejection |
 | Drawing tools | shape rasterization, clipping, filled/outlined ellipses, symmetry, sprite flips, paint masks and undo |
+| Artist tools | saved assets and version migration, editable fonts and alpha import, indexed gradients, custom/radial symmetry, seamless strokes, reference-guide export exclusion and two-sided onion skins |
 | Editing workflows | linked tile updates, tile painting, brush rotation and wrapping, palette remapping, selected-color drawing/fill and undo |
 | Layer workflows | compositing, transparency, visibility, locking, modifiers, independent paint copies, layer migration and project roundtrips |
 | MCP | protocol handshake, tool contracts, atomic edits, undo, locks, PNG previews, server lifecycle and authenticated stdio relay |
@@ -314,9 +348,9 @@ The desktop smoke test also renders real editor screenshots, for example on Wind
 
 ## Not yet
 
-- pixel-perfect stroke cleanup, curves and gradient drawing
-- animated ROM playback, sprite-sheet animation export and richer animation editing
-- metasprites, 8x16 sprites and a persistent library of unplaced tiles
+- pixel-perfect stroke cleanup and curves
+- animated ROM playback and sprite-sheet animation export
+- metasprites, 8x16 sprites and dedicated CHR-bank organization
 - banked mappers and physical hardware verification
 
 ## Background

@@ -8,7 +8,7 @@ namespace tzj {
 namespace {
 constexpr ImGuiWindowFlags fixed_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                          ImGuiWindowFlags_NoSavedSettings |
-                                         ImGuiWindowFlags_NoDocking;
+                                         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus;
 ImVec4 paint_color(Byte index) {
     auto c = nes_colors[index];
     return {c.r / 255.f, c.g / 255.f, c.b / 255.f, 1};
@@ -188,8 +188,18 @@ void Editor::start_workspace(std::string_view name) {
         choose_workspace(Workspace::Animate);
     else if (name == "export")
         choose_workspace(Workspace::Export);
-    else
-        throw std::runtime_error("Unknown workspace; use draw, tiles, sprites, animate or export");
+    else if (name == "brushes")
+        show_brush_library_ = true;
+    else if (name == "text")
+        show_bitmap_text_ = true;
+    else if (name == "gradients")
+        show_gradients_ = true;
+    else if (name == "onion") {
+        show_onion_settings_ = true;
+        show_timeline_ = true;
+    } else
+        throw std::runtime_error("Unknown workspace; use draw, tiles, sprites, animate, export, "
+                                 "brushes, text, gradients or onion");
 }
 void Editor::new_project() {
     welcome_ = false;
@@ -208,6 +218,7 @@ void Editor::new_project() {
 }
 void Editor::add_blank_sprite() {
     cancel_drawing();
+    custom_symmetry_ = false;
     checkpoint();
     Sprite sprite;
     sprite.name = "Sprite " + std::to_string(project.frames[frame_].sprites.size() + 1);
@@ -323,6 +334,7 @@ void Editor::info_windows() {
     if (show_hardware_ && !advanced_panels_)
         hardware(false, &show_hardware_);
     emulator_window();
+    artist_windows();
 }
 void Editor::guided_workspace() {
     auto *viewport = ImGui::GetMainViewport();

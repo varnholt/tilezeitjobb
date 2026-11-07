@@ -19,7 +19,7 @@ Module['importFile'] = async function (file, action) {
 };
 Module['pickFile'] = function (action) {
   const input = document.createElement('input'); input.type = 'file';
-  input.accept = action === 1 ? '.tzj' : '.png,.bmp,.jpg,.jpeg,.tga';
+  input.accept = action === 1 || action === 7 ? '.tzj' : '.png,.bmp,.jpg,.jpeg,.tga';
   input.onchange = () => Module.importFile(input.files[0], action).catch(error => alert(error.message));
   input.click();
 };

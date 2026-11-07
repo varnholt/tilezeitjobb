@@ -62,6 +62,7 @@ class Editor {
     void boot_emulator();
     void upload_emulator();
     bool guidance_{true}, advanced_panels_{}, fullscreen_{};
+    bool preview_native_size_{true};
     void choose_workspace(Workspace);
     struct PanelRect {
         float x{}, y{}, width{}, height{};
@@ -96,7 +97,35 @@ class Editor {
         TileBrush,
         Pan
     };
-    enum class FileAction { None, Open, Save, Background, Sprites, Export, Png };
+    enum class FileAction {
+        None,
+        Open,
+        Save,
+        Background,
+        Sprites,
+        Export,
+        Png,
+        Brushes,
+        FontSheet
+    };
+    bool show_brush_library_{}, show_bitmap_text_{}, show_gradients_{}, show_onion_settings_{};
+    int library_selection_{-1}, glyph_{'A'}, text_spacing_{}, text_line_gap_{}, text_scale_{1};
+    char asset_name_[129]{"New brush"}, ramp_name_[129]{"New color ramp"}, text_[1025]{"PLAYER 1"};
+    bool text_recolor_{true}, glyph_stroke_{}, gradient_vertical_{true};
+    int gradient_width_{32}, gradient_height_{32}, gradient_dither_{1};
+    std::array<Byte, 4> gradient_order_{0, 1, 2, 3};
+    int onion_previous_{1}, onion_following_{1}, onion_opacity_{35};
+    bool onion_sprites_only_{true};
+    bool custom_symmetry_{};
+    float symmetry_x_{127.5f}, symmetry_y_{119.5f};
+    int symmetry_sectors_{1};
+    bool seamless_tiles_{true};
+    int tile_last_x_{}, tile_last_y_{};
+    void artist_windows();
+    void brush_library();
+    void bitmap_text();
+    void gradient_editor();
+    void use_brush(const IndexedBrush &);
     History history_;
     std::size_t frame_{};
     int layer_{-1}, palette_{}, slot_{1}, brush_{1}, grid_{8}, tile_x_{}, tile_y_{};

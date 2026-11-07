@@ -112,7 +112,7 @@ void Editor::edit_selected_tile(const Tile &replacement) {
 }
 void Editor::tiles(bool embedded, bool *open) {
     if (!embedded)
-        ImGui::SetNextWindowSize({420, 520}, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize({420, 740}, ImGuiCond_FirstUseEver);
     if (!embedded && !ImGui::Begin("Tiles", open)) {
         if (!embedded)
             ImGui::End();
@@ -161,23 +161,47 @@ void Editor::tiles(bool embedded, bool *open) {
     ImGui::EndChild();
     if (tile_selected_) {
         ui::Checkbox("Edit all identical map tiles", &edit_linked_tiles_);
-        ImGui::TextWrapped(
-            "Linked edits affect the current frame. Each 16x16 region keeps its own palette.");
+        ui::Checkbox("Seamless pattern view", &seamless_tiles_);
         auto origin = ImGui::GetCursorScreenPos();
-        ui::InvisibleButton("edit-tile", {160, 160});
+        int cells = seamless_tiles_ ? 24 : 8;
+        float scale = seamless_tiles_ ? 12.f : 20.f, side = cells * scale;
+        ui::InvisibleButton("edit-tile", {side, side},
+                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        if (ImGui::IsItemActivated()) {
+            cancel_drawing();
+            layer_ = -1;
+            palette_group_ = 0;
+        }
         auto *draw = ImGui::GetWindowDrawList();
-        draw_tile(draw, origin, 20, selected_tile_, project.background[palette_]);
-        for (int i = 0; i <= 8; ++i) {
-            draw->AddLine({origin.x + i * 20, origin.y}, {origin.x + i * 20, origin.y + 160},
+        for (int y = 0; y < cells; y += 8)
+            for (int x = 0; x < cells; x += 8)
+                draw_tile(draw, {origin.x + x * scale, origin.y + y * scale}, scale, selected_tile_,
+                          project.background[palette_]);
+        for (int i = 0; i <= cells; ++i) {
+            draw->AddLine({origin.x + i * scale, origin.y}, {origin.x + i * scale, origin.y + side},
                           IM_COL32(90, 95, 100, 130));
-            draw->AddLine({origin.x, origin.y + i * 20}, {origin.x + 160, origin.y + i * 20},
+            draw->AddLine({origin.x, origin.y + i * scale}, {origin.x + side, origin.y + i * scale},
                           IM_COL32(90, 95, 100, 130));
         }
-        if (ImGui::IsItemHovered() && (ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1))) {
-            int x = std::clamp(static_cast<int>((ImGui::GetIO().MousePos.x - origin.x) / 20), 0, 7),
-                y = std::clamp(static_cast<int>((ImGui::GetIO().MousePos.y - origin.y) / 20), 0, 7);
+        if (seamless_tiles_)
+            draw->AddRect({origin.x + 8 * scale, origin.y + 8 * scale},
+                          {origin.x + 16 * scale, origin.y + 16 * scale},
+                          IM_COL32(255, 205, 90, 230), 0, 0, 2);
+        if (ImGui::IsItemActive() && (ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1)) &&
+            target_editable()) {
+            int x = std::clamp(static_cast<int>((ImGui::GetIO().MousePos.x - origin.x) / scale), 0,
+                               cells - 1),
+                y = std::clamp(static_cast<int>((ImGui::GetIO().MousePos.y - origin.y) / scale), 0,
+                               cells - 1);
+            if (ImGui::IsItemActivated() || !tile_edit_stroke_) {
+                tile_last_x_ = x;
+                tile_last_y_ = y;
+            }
             Tile replacement = selected_tile_;
-            replacement[y * 8 + x] = static_cast<Byte>(ImGui::IsMouseDown(1) ? 0 : slot_);
+            replacement = wrapped_tile_line(replacement, tile_last_x_, tile_last_y_, x, y,
+                                            Byte(ImGui::IsMouseDown(1) ? 0 : slot_));
+            tile_last_x_ = x;
+            tile_last_y_ = y;
             if (replacement != selected_tile_) {
                 if (!tile_edit_stroke_) {
                     checkpoint();

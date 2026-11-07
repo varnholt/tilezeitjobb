@@ -46,6 +46,8 @@ Json describe(const Project &p, std::size_t frame) {
                           {"kind", l.kind == LayerKind::Paint ? "paint" : "image"},
                           {"visible", l.visible},
                           {"locked", l.locked},
+                          {"reference_only", l.reference_only},
+                          {"guide_opacity", l.guide_opacity},
                           {"dither", int(l.modifiers.dither)},
                           {"strength", l.modifiers.strength}});
     }

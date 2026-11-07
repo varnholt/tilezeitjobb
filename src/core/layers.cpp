@@ -6,7 +6,8 @@
 namespace tzj {
 bool BackgroundLayer::operator==(const BackgroundLayer &o) const {
     return name == o.name && kind == o.kind && visible == o.visible && locked == o.locked &&
-           effects_enabled == o.effects_enabled && pixels == o.pixels && source == o.source &&
+           effects_enabled == o.effects_enabled && reference_only == o.reference_only &&
+           guide_opacity == o.guide_opacity && pixels == o.pixels && source == o.source &&
            source_path == o.source_path && modifiers == o.modifiers;
 }
 namespace {
@@ -178,7 +179,7 @@ void compose(const Project &p, Frame &f, bool force) {
     for (auto &layer : f.layers) {
         if (layer.kind == LayerKind::Image)
             convert(p, f, layer, force);
-        if (!f.background_visible || !layer.visible)
+        if (!f.background_visible || !layer.visible || layer.reference_only)
             continue;
         const auto &pixels = layer.kind == LayerKind::Image ? layer.converted : layer.pixels;
         if (pixels.size() != f.pixels.size())
@@ -191,6 +192,11 @@ void compose(const Project &p, Frame &f, bool force) {
     }
 }
 } // namespace
+Color guide_pixel(const BackgroundLayer &layer, int x, int y) {
+    auto color = source_pixel(layer, x, y);
+    color.a = Byte(int(color.a) * std::clamp(layer.guide_opacity, 0, 100) / 100);
+    return color;
+}
 void Project::ensure_layers(std::size_t frame) {
     auto &f = frames.at(frame);
     if (!f.layers.empty())
@@ -298,6 +304,7 @@ std::size_t Project::duplicate_layer(std::size_t frame, std::size_t index, bool 
     copy.visible = true;
     copy.locked = false;
     if (paintable && copy.kind == LayerKind::Image) {
+        copy.reference_only = false;
         copy.kind = LayerKind::Paint;
         copy.pixels = copy.converted;
         copy.source = {};
@@ -337,6 +344,8 @@ void Project::merge_layer_down(std::size_t frame, std::size_t index) {
         throw std::runtime_error("Choose a layer above another background layer");
     auto &top = f.layers[index];
     auto &bottom = f.layers[index - 1];
+    if (top.reference_only || bottom.reference_only)
+        throw std::runtime_error("Make a paintable copy of reference guides before merging");
     if (f.background_locked || top.locked || bottom.locked || !top.visible || !bottom.visible)
         throw std::runtime_error("Show and unlock both layers before merging");
     compose_layers(frame);

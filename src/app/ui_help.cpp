@@ -6,6 +6,103 @@
 namespace tzj::ui {
 namespace {
 constexpr std::pair<std::string_view, const char *> descriptions[]{
+    {"Edit bitmap font", "Edit individual 8x8 glyphs, import a font sheet, or restore the built-in "
+                         "font. Font changes are saved with the project."},
+    {"Direction", "Choose whether the gradient runs from left to right or from top to bottom."},
+    {"Start", "The color slot at the start of the gradient. The four ramp stops use the active NES "
+              "color set."},
+    {"End", "The color slot at the end of the gradient."},
+    {"Ramp stop",
+     "An intermediate indexed color in the gradient; choose any slot from the active color set."},
+    {"Brush width",
+     "Width of the gradient brush in pixels. Selection filling uses the selection size instead."},
+    {"Brush height",
+     "Height of the gradient brush in pixels. Selection filling uses the selection size instead."},
+    {"Ramp name",
+     "A name for the current four NES colors and gradient slot order in the project library."},
+    {"Delete ramp", "Remove this saved ramp without recoloring existing artwork. Undo restores the "
+                    "library entry."},
+    {"Center X", "Horizontal symmetry center in target pixels. Half coordinates place the axis "
+                 "between pixels."},
+    {"Center Y",
+     "Vertical symmetry center in target pixels. Half coordinates place the axis between pixels."},
+    {"Symmetry settings",
+     "Set a custom mirror center and the number of rotated copies for drawing strokes."},
+    {"Onion skin enabled", "Overlay nearby animation frames as colored guides. Ghosts never become "
+                           "artwork or exported pixels."},
+    {"Ghost opacity", "Opacity of the nearest ghost frame. More distant ghosts fade in proportion "
+                      "to their distance."},
+    {"Brush library", "Save named indexed brushes and multi-tile groups with the project, then "
+                      "reuse them across frames. Import libraries from another project."},
+    {"Bitmap text", "Build text from editable 8x8 glyphs. Use it as a transparent indexed brush on "
+                    "a paint layer."},
+    {"Gradient fill", "Create NES-safe gradients using the active color set, reordered color slots "
+                      "and optional ordered or noise dithering."},
+    {"Brush name", "Name the brush you are about to save, or use Rename saved brush to update the "
+                   "selected library entry."},
+    {"Save selection as brush", "Store the selected rectangle as indexed pixels with transparency. "
+                                "The destination region supplies its NES colors."},
+    {"Save captured brush",
+     "Save the current captured brush in this project's reusable asset library."},
+    {"Save selected sprite", "Save the selected sprite's displayed pixels as an 8x8 brush. Sprite "
+                             "color zero becomes transparent."},
+    {"Use saved brush", "Load this asset into the stamp tool. Click or drag on a paint layer; one "
+                        "stroke is one undo step."},
+    {"Create sprite",
+     "Make an editable 8x8 sprite from this saved brush using the selected sprite color set."},
+    {"Rename saved brush", "Give the selected library asset the text from Brush name."},
+    {"Delete saved brush", "Remove this asset from the library. Already stamped artwork stays "
+                           "unchanged; undo can restore the asset."},
+    {"Import from project...",
+     "Copy saved brushes and color ramps from another .tzj project without loading its artwork."},
+    {"Import brushes and color sets...", "Import reusable indexed brushes, tile groups and named "
+                                         "color ramps from another saved project."},
+    {"Letter spacing", "Extra pixels between 8x8 glyph cells before pixel scaling."},
+    {"Line spacing", "Extra pixels between rows of text before pixel scaling."},
+    {"Pixel scale", "Enlarge each font pixel by an exact integer factor."},
+    {"Use current paint color", "Recolor every opaque glyph pixel to the chosen paint slot. Turn "
+                                "off to keep the font's own indexed shading."},
+    {"Use text as brush", "Prepare the text for stamping on a paint layer. The project font stays "
+                          "editable, while stamped text becomes independent pixels."},
+    {"Glyph", "Choose one printable ASCII character to edit in the pixel grid below."},
+    {"Glyph pixels", "Draw with the active color slot; right-drag erases to transparency. A glyph "
+                     "stroke is one undo step."},
+    {"Import font sheet...", "Import at least 96 row-major 8x8 cells beginning with ASCII space. "
+                             "Pixels map to the current NES color set."},
+    {"Restore built-in font",
+     "Replace the project font with the built-in 8x8 alphabet, numbers and punctuation. Stamped "
+     "text remains unchanged; this can be undone."},
+    {"Gradient dithering", "None makes solid color bands; ordered gives a repeating 4x4 "
+                           "transition; noise uses a deterministic scattered transition."},
+    {"Fill selected area", "Fill the selected rectangle on the active paint layer as one undo "
+                           "step. Existing NES color-region assignments remain in place."},
+    {"Use gradient as brush",
+     "Prepare an indexed gradient of the chosen dimensions for stamping on a paint layer."},
+    {"Save current color ramp",
+     "Save the current four NES colors and gradient slot order with the project."},
+    {"Seamless pattern view", "Edit an 8x8 pattern through a 3x3 repetition. Strokes wrap across "
+                              "tile boundaries, exposing seams immediately."},
+    {"Custom center", "Place mirror and radial symmetry around a chosen pixel coordinate instead "
+                      "of the target's center."},
+    {"Radial copies", "Repeat each drawing stroke around the symmetry center. One means no "
+                      "rotation; mirrors can also be enabled."},
+    {"Onion skin settings...", "Choose previous and following frames, opacity falloff and whether "
+                               "ghosts include only sprites."},
+    {"Previous frames (green)",
+     "Number of earlier frames shown as green ghosts; distant frames fade more."},
+    {"Following frames (pink)",
+     "Number of later frames shown as pink ghosts; distant frames fade more."},
+    {"Sprites only",
+     "Ghost only the animated sprite objects. Turn off to include changed background artwork."},
+    {"Reference guide (not exported)",
+     "Show the original source image as a drawing guide. It contributes no pixels, tiles or colors "
+     "to ROM or artwork export."},
+    {"Guide opacity", "Blend this source into the editing canvas. NES output still uses only "
+                      "exported indexed layers and binary sprite transparency."},
+    {"Native size (1:1)", "Show one artwork pixel per display pixel in the overview. Turn off to "
+                          "fit the preview window."},
+    {"Compact color sets",
+     "Show the active color set with a selector; turn off to display all four sets together."},
     {"NES preview", "Run the exported mapper-0 ROM in the built-in C++ emulator. Includes pause, "
                     "reset, frame stepping and optional rebuild after edits."},
     {"Run current artwork", "Compile the selected frame to a ROM and boot it in the NES preview. "

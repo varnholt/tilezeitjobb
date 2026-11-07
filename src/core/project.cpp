@@ -1,4 +1,4 @@
-#include "core/project.hpp"
+#include "core/tools.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -103,6 +103,29 @@ void Project::validate() const {
            (width == 256 && height == 480)),
          "Invalid project dimensions");
     fail(frames.empty() || frames.size() > 256, "Project requires 1 to 256 frames");
+    fail(brushes.size() > 128 || ramps.size() > 64, "Too many saved brushes or color ramps");
+    std::size_t brush_bytes = 0;
+    for (const auto &brush : brushes) {
+        fail(brush.name.empty() || brush.name.size() > 128 || brush.width < 1 || brush.height < 1 ||
+                 brush.width > 512 || brush.height > 512 ||
+                 brush.pixels.size() != std::size_t(brush.width) * brush.height,
+             "Invalid saved brush");
+        brush_bytes += brush.pixels.size();
+        for (auto pixel : brush.pixels)
+            fail(pixel > 3 && pixel != 255, "Invalid saved brush color");
+    }
+    fail(brush_bytes > 16 * 1024 * 1024, "Saved brush library exceeds 16 MiB");
+    for (const auto &ramp : ramps) {
+        fail(ramp.name.empty() || ramp.name.size() > 128, "Invalid color ramp name");
+        for (auto c : ramp.colors)
+            fail(c > 63, "Invalid saved ramp color");
+        for (auto slot : ramp.order)
+            fail(slot > 3, "Invalid saved ramp slot");
+    }
+    fail(font.name.empty() || font.name.size() > 128, "Invalid bitmap font name");
+    for (const auto &glyph : font.glyphs)
+        for (auto pixel : glyph)
+            fail(pixel > 3 && pixel != 255, "Invalid bitmap font color");
     fail(std::abs(static_cast<long long>(offset_x)) > 4096 ||
              std::abs(static_cast<long long>(offset_y)) > 4096,
          "Image offset out of range");
@@ -133,6 +156,9 @@ void Project::validate() const {
             fail(l.name.size() > 4096 || l.source_path.size() > 32768,
                  "Layer text exceeds project limits");
             fail(l.kind != LayerKind::Paint && l.kind != LayerKind::Image, "Invalid layer type");
+            fail(l.guide_opacity < 0 || l.guide_opacity > 100 ||
+                     (l.reference_only && l.kind != LayerKind::Image),
+                 "Invalid reference guide settings");
             if (l.kind == LayerKind::Paint) {
                 fail(l.pixels.size() != f.pixels.size(), "Invalid paint layer dimensions");
                 for (auto c : l.pixels)
@@ -298,7 +324,7 @@ void Project::generate_sprites(std::size_t frame, int pal) {
         }
     f.sprites = std::move(generated);
 }
-Image Project::render(std::size_t index, bool sprites, bool hardware_limits) const {
+Image Project::render(std::size_t index, bool sprites, bool hardware_limits, bool guides) const {
     Frame flattened;
     if (!frames.at(index).layers.empty())
         flattened = composed_frame(index);
@@ -311,11 +337,36 @@ Image Project::render(std::size_t index, bool sprites, bool hardware_limits) con
         im.rgba[i + 2] = c.b;
         im.rgba[i + 3] = 255;
     };
+    bool show_guides = guides && f.background_visible &&
+                       std::any_of(f.layers.begin(), f.layers.end(),
+                                   [](const auto &l) { return l.visible && l.reference_only; });
     for (int y = 0; y < height; ++y)
-        for (int x = 0; x < width; ++x)
-            set(x, y,
-                nes_colors[background[f.attributes[(y / 16) * block_width() + x / 16]]
-                                     [f.pixels[y * width + x]]]);
+        for (int x = 0; x < width; ++x) {
+            auto palette = background[f.attributes[(y / 16) * block_width() + x / 16]];
+            Color color = nes_colors[palette[f.pixels[y * width + x]]];
+            if (show_guides) {
+                color = nes_colors[background[0][0]];
+                for (const auto &layer : f.layers)
+                    if (layer.visible) {
+                        if (layer.reference_only) {
+                            auto over = guide_pixel(layer, x, y);
+                            color.r =
+                                Byte((int(over.r) * over.a + int(color.r) * (255 - over.a)) / 255);
+                            color.g =
+                                Byte((int(over.g) * over.a + int(color.g) * (255 - over.a)) / 255);
+                            color.b =
+                                Byte((int(over.b) * over.a + int(color.b) * (255 - over.a)) / 255);
+                        } else {
+                            auto pixel =
+                                (layer.kind == LayerKind::Paint ? layer.pixels : layer.converted)
+                                    .at(y * width + x);
+                            if (pixel != 255)
+                                color = nes_colors[palette[pixel]];
+                        }
+                    }
+            }
+            set(x, y, color);
+        }
     if (sprites && f.sprites_visible) {
         // OAM priority: lower object index wins, including transparent-background priority.
         std::vector<bool> claimed(width * height);
@@ -467,7 +518,7 @@ void save_project(const std::filesystem::path &path, const Project &input) {
     const auto &p = snapshot;
     p.validate();
     Json j{{"format", "tilezeitjobb"},
-           {"version", 3},
+           {"version", 4},
            {"width", p.width},
            {"height", p.height},
            {"offset_x", p.offset_x},
@@ -480,6 +531,18 @@ void save_project(const std::filesystem::path &path, const Project &input) {
            {"reference", image_json(p.reference)},
            {"sprite_sheet", image_json(p.sprite_sheet)},
            {"frames", Json::array()}};
+    j["brushes"] = Json::array();
+    for (const auto &b : p.brushes)
+        j["brushes"].push_back({{"name", b.name},
+                                {"width", b.width},
+                                {"height", b.height},
+                                {"pixels", hex(b.pixels)}});
+    j["ramps"] = Json::array();
+    for (const auto &r : p.ramps)
+        j["ramps"].push_back({{"name", r.name}, {"colors", r.colors}, {"order", r.order}});
+    j["font"] = {{"name", p.font.name}, {"glyphs", Json::array()}};
+    for (const auto &g : p.font.glyphs)
+        j["font"]["glyphs"].push_back(hex(std::vector<Byte>(g.begin(), g.end())));
     for (const auto &f : p.frames) {
         Json sprites = Json::array();
         for (const auto &s : f.sprites)
@@ -503,6 +566,8 @@ void save_project(const std::filesystem::path &path, const Project &input) {
                               {"visible", l.visible},
                               {"locked", l.locked},
                               {"effects_enabled", l.effects_enabled},
+                              {"reference_only", l.reference_only},
+                              {"guide_opacity", l.guide_opacity},
                               {"pixels", hex(l.pixels)},
                               {"source", image_json(l.source)},
                               {"source_path", l.source_path},
@@ -659,7 +724,8 @@ Project load_project(const std::filesystem::path &path) {
     if (text[start] != '{')
         return read_legacy(text, path);
     const auto j = Json::parse(text);
-    if (j.at("format") != "tilezeitjobb" || (j.at("version") != 2 && j.at("version") != 3))
+    if (j.at("format") != "tilezeitjobb" ||
+        (j.at("version") != 2 && j.at("version") != 3 && j.at("version") != 4))
         throw std::runtime_error("Unsupported project format/version");
     Project p;
     p.resize(checked_int(j.at("width"), 256, 512), checked_int(j.at("height"), 240, 480));
@@ -674,6 +740,45 @@ Project load_project(const std::filesystem::path &path) {
     p.sprite_palettes = j.at("sprite_palettes").get<decltype(p.sprite_palettes)>();
     p.reference = read_image(j.at("reference"));
     p.sprite_sheet = read_image(j.at("sprite_sheet"));
+    if (j.contains("brushes")) {
+        if (!j["brushes"].is_array() || j["brushes"].size() > 128)
+            throw std::runtime_error("Invalid brush library");
+        std::size_t total = 0;
+        for (const auto &jb : j["brushes"]) {
+            SavedBrush b;
+            b.name = jb.at("name");
+            b.width = checked_int(jb.at("width"), 1, 512);
+            b.height = checked_int(jb.at("height"), 1, 512);
+            total += std::size_t(b.width) * b.height;
+            if (total > 16 * 1024 * 1024)
+                throw std::runtime_error("Brush library exceeds 16 MiB");
+            b.pixels = unhex(jb.at("pixels"), std::size_t(b.width) * b.height);
+            p.brushes.push_back(std::move(b));
+        }
+    }
+    if (j.contains("ramps")) {
+        if (!j["ramps"].is_array() || j["ramps"].size() > 64)
+            throw std::runtime_error("Invalid saved ramps");
+        for (const auto &jr : j["ramps"]) {
+            ColorRamp ramp;
+            ramp.name = jr.at("name");
+            byte_array(jr.at("colors"), 4, 63);
+            byte_array(jr.at("order"), 4, 3);
+            ramp.colors = jr.at("colors").get<Palette>();
+            ramp.order = jr.at("order").get<std::array<Byte, 4>>();
+            p.ramps.push_back(std::move(ramp));
+        }
+    }
+    if (j.contains("font")) {
+        const auto &font = j["font"];
+        p.font.name = font.at("name");
+        if (!font.at("glyphs").is_array() || font["glyphs"].size() != 96)
+            throw std::runtime_error("Invalid bitmap font");
+        for (std::size_t i = 0; i < 96; ++i) {
+            auto bytes = unhex(font["glyphs"][i], 64);
+            std::copy(bytes.begin(), bytes.end(), p.font.glyphs[i].begin());
+        }
+    }
     p.frames.clear();
     if (!j.at("frames").is_array() || j.at("frames").empty() || j.at("frames").size() > 256)
         throw std::runtime_error("Invalid frame count");
@@ -717,6 +822,8 @@ Project load_project(const std::filesystem::path &path) {
                 l.visible = jl.at("visible");
                 l.locked = jl.at("locked");
                 l.effects_enabled = jl.value("effects_enabled", true);
+                l.reference_only = jl.value("reference_only", false);
+                l.guide_opacity = checked_int(jl.value("guide_opacity", Json(50)), 0, 100);
                 if (l.kind == LayerKind::Paint)
                     l.pixels = unhex(jl.at("pixels"), f.pixels.size());
                 l.source = read_image(jl.at("source"));
@@ -963,6 +1070,20 @@ Project demo_project() {
                 p.sprite_sheet.rgba[out + 2] = c.b;
                 p.sprite_sheet.rgba[out + 3] = slot ? 255 : 0;
             }
+    auto save_brush = [&](std::string name, IndexedBrush brush) {
+        for (auto &pixel : brush.pixels)
+            if (!pixel)
+                pixel = 255;
+        p.brushes.push_back({std::move(name), brush.width, brush.height, std::move(brush.pixels)});
+    };
+    save_brush("Star tile", capture_brush(p, 0, 0, 0, 8, 8));
+    save_brush("Planet", capture_brush(p, 0, 16, 96, 64, 64));
+    save_brush("Ship hull", capture_brush(p, 0, 80, 112, 128, 48));
+    if (!f.sprites.empty())
+        save_brush("Sprite highlight",
+                   {8, 8, {f.sprites[0].pixels.begin(), f.sprites[0].pixels.end()}});
+    p.ramps = {{"Deep blue", p.background[0], {0, 1, 2, 3}},
+               {"Planet blue", p.background[2], {0, 1, 2, 3}}};
     return p;
 }
 
@@ -974,6 +1095,9 @@ void History::checkpoint(const Project &p) {
     std::size_t bytes = 0;
     for (auto it = past_.rbegin(); it != past_.rend(); ++it) {
         bytes += it->reference.rgba.size() + it->sprite_sheet.rgba.size();
+        bytes += sizeof(BitmapFont) + it->ramps.size() * sizeof(ColorRamp);
+        for (const auto &brush : it->brushes)
+            bytes += brush.pixels.size() + brush.name.size();
         for (const auto &f : it->frames)
             bytes += f.pixels.size() + f.paint_mask.size() + f.attributes.size() +
                      f.sprites.size() * sizeof(Sprite);
@@ -984,6 +1108,9 @@ void History::checkpoint(const Project &p) {
     while (past_.size() > 1 && (past_.size() > 32 || bytes > 64 * 1024 * 1024)) {
         const auto &old = past_.front();
         bytes -= old.reference.rgba.size() + old.sprite_sheet.rgba.size();
+        bytes -= sizeof(BitmapFont) + old.ramps.size() * sizeof(ColorRamp);
+        for (const auto &brush : old.brushes)
+            bytes -= brush.pixels.size() + brush.name.size();
         for (const auto &f : old.frames)
             bytes -= f.pixels.size() + f.paint_mask.size() + f.attributes.size() +
                      f.sprites.size() * sizeof(Sprite);

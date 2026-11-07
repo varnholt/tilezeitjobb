@@ -44,10 +44,30 @@ struct ImageModifiers {
     DitherMode dither{DitherMode::Bayer4};
     bool operator==(const ImageModifiers &) const = default;
 };
+struct SavedBrush {
+    std::string name{"Brush"};
+    int width{}, height{};
+    std::vector<Byte> pixels;
+    bool operator==(const SavedBrush &) const = default;
+};
+struct ColorRamp {
+    std::string name{"Color ramp"};
+    Palette colors{15, 1, 33, 48};
+    std::array<Byte, 4> order{0, 1, 2, 3};
+    bool operator==(const ColorRamp &) const = default;
+};
+struct BitmapFont {
+    std::string name{"Studio 8x8"};
+    std::array<Tile, 96> glyphs{}; // ASCII 32..127; 255 is transparent.
+    bool operator==(const BitmapFont &) const = default;
+};
+BitmapFont default_bitmap_font();
 struct BackgroundLayer {
     std::string name{"Paint layer"};
     LayerKind kind{LayerKind::Paint};
     bool visible{true}, locked{}, effects_enabled{true};
+    bool reference_only{};
+    int guide_opacity{50};
     // Paint pixels: 0..3 are opaque NES slots, 255 is transparent.
     std::vector<Byte> pixels;
     Image source;
@@ -85,6 +105,9 @@ struct Project {
     std::array<Palette, 4> sprite_palettes{
         {{15, 22, 39, 48}, {15, 1, 33, 48}, {15, 9, 25, 41}, {15, 6, 22, 38}}};
     std::vector<Frame> frames;
+    std::vector<SavedBrush> brushes;
+    std::vector<ColorRamp> ramps;
+    BitmapFont font{default_bitmap_font()};
     Project();
     int block_width() const { return width / 16; }
     int block_height() const { return height / 16; }
@@ -93,7 +116,8 @@ struct Project {
     void quantize(std::size_t frame = 0, bool auto_palettes = false);
     Sprite make_sprite(int tx, int ty, int palette, int x, int y) const;
     void generate_sprites(std::size_t frame, int palette);
-    Image render(std::size_t frame = 0, bool sprites = true, bool hardware_limits = false) const;
+    Image render(std::size_t frame = 0, bool sprites = true, bool hardware_limits = false,
+                 bool guides = false) const;
     void set_backdrop(Byte color);
     void ensure_layers(std::size_t frame);
     void compose_layers(std::size_t frame, bool force = false);

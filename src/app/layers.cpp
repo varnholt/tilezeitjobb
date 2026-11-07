@@ -63,6 +63,13 @@ void thumbnail(const Project &p, const Frame &f, const BackgroundLayer *layer,
                 auto color = nes_colors[(sprite ? p.sprite_palettes : p.background)[pal][value]];
                 c = IM_COL32(color.r, color.g, color.b, 255);
             }
+            if (layer && layer->reference_only) {
+                auto guide = guide_pixel(*layer, sx, sy);
+                int r = (int(guide.r) * guide.a + shade * (255 - guide.a)) / 255;
+                int g = (int(guide.g) * guide.a + (shade + 3) * (255 - guide.a)) / 255;
+                int b = (int(guide.b) * guide.a + (shade + 7) * (255 - guide.a)) / 255;
+                c = IM_COL32(r, g, b, 255);
+            }
             d->AddRectFilled({pos.x + x, pos.y + 3 + y}, {pos.x + x + 1, pos.y + 4 + y}, c);
         }
     d->AddRect({pos.x, pos.y + 3}, {pos.x + side, pos.y + 3 + side}, IM_COL32(90, 107, 121, 255));
@@ -177,11 +184,13 @@ void Editor::layer_stack() {
         auto *d = ImGui::GetWindowDrawList();
         const char *type =
             sprite ? (f.sprites[index].behind ? "Sprite / behind background" : "Sprite object")
+            : f.layers[index].reference_only           ? "Reference / not exported"
             : f.layers[index].kind == LayerKind::Image ? "Image / live modifiers"
                                                        : "Paint / indexed pixels";
         d->AddText(nullptr, 12, {pos.x, pos.y + 20}, IM_COL32(140, 157, 172, 255), type);
         if (picked) {
             cancel_drawing();
+            custom_symmetry_ = false;
             if (sprite) {
                 layer_ = index;
                 palette_group_ = 1;
@@ -362,6 +371,20 @@ void Editor::layer_properties() {
                  "paintable copy captures that result as editable pixels.");
         ui::Text("Source: %d x %d", l.source.width, l.source.height);
         ImGui::BeginDisabled(l.locked || f.background_locked);
+        bool guide = l.reference_only;
+        if (ui::Checkbox("Reference guide (not exported)", &guide)) {
+            checkpoint();
+            l.reference_only = guide;
+            changed();
+        }
+        if (l.reference_only) {
+            int opacity = l.guide_opacity;
+            if (ui::SliderInt("Guide opacity", &opacity, 0, 100)) {
+                checkpoint();
+                l.guide_opacity = opacity;
+                changed();
+            }
+        }
         bool effects = l.effects_enabled;
         if (ui::Checkbox("Enable modifiers", &effects)) {
             checkpoint();

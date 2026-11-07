@@ -44,4 +44,17 @@ void stamp_brush(Project &, std::size_t frame, int x, int y, const IndexedBrush 
 // Only slots 1..3 may be reordered: slot zero is backdrop/transparency on NES.
 void swap_palette_slots(Project &, bool sprites, int palette, int first, int second,
                         bool preserve_artwork = true);
+enum class GradientDither { None, Ordered, Noise };
+IndexedBrush gradient_brush(int width, int height, const std::array<Byte, 4> &order, bool vertical,
+                            GradientDither);
+IndexedBrush text_brush(const BitmapFont &, std::string_view text, Byte color, int spacing = 0,
+                        int line_gap = 0, int scale = 1, bool recolor = true);
+BitmapFont font_from_sheet(const Image &, const Palette &, bool opaque_background = true);
+std::vector<PixelPoint> symmetric_pixels(const std::vector<PixelPoint> &, int width, int height,
+                                         float center_x, float center_y, bool mirror_x,
+                                         bool mirror_y, int sectors = 1);
+Tile wrapped_tile_line(const Tile &, int x0, int y0, int x1, int y1, Byte color);
+Image onion_overlay(const Project &, std::size_t frame, int previous, int following, int opacity,
+                    bool sprites_only);
+Color guide_pixel(const BackgroundLayer &, int x, int y);
 } // namespace tzj

@@ -73,10 +73,11 @@ int main(int argc, char **argv) {
         else if (arg == "--screenshot" && i + 1 < argc)
             screenshot = argv[++i];
         else if (arg == "--help") {
-            std::cout << "tilezeitjobb [PROJECT.tzj] [--demo] [--fullscreen] [--workspace "
-                         "draw|tiles|sprites|animate|export] [--smoke-test] "
-                         "[--screenshot FILE.png] [--mcp] [--nes-preview]\n"
-                         "tilezeitjobb --mcp-connect PORT TOKEN\n";
+            std::cout
+                << "tilezeitjobb [PROJECT.tzj] [--demo] [--fullscreen] [--workspace "
+                   "draw|tiles|sprites|animate|export|brushes|text|gradients|onion] [--smoke-test] "
+                   "[--screenshot FILE.png] [--mcp] [--nes-preview]\n"
+                   "tilezeitjobb --mcp-connect PORT TOKEN\n";
             return 0;
         } else
             input = argv[i];
