@@ -35,7 +35,7 @@ std::vector<PixelPoint> path_pixels(const std::vector<PixelPoint> &, int width, 
 void flood_fill_sprite(Project &, std::size_t frame, std::size_t sprite, int x, int y, Byte color);
 // Sprite points use displayed coordinates; flips are applied when writing storage.
 void paint_pixels(Project &, std::size_t frame, const std::vector<PixelPoint> &, Byte color,
-                  int palette = -1, int sprite = -1);
+                  int palette = -1, int sprite = -1, bool erase = false);
 enum class BrushTransform { FlipX, FlipY, RotateCW, RotateCCW };
 IndexedBrush capture_brush(const Project &, std::size_t frame, int x, int y, int width, int height);
 IndexedBrush transform_brush(const IndexedBrush &, BrushTransform);

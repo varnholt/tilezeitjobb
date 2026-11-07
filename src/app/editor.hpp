@@ -1,8 +1,14 @@
 #pragma once
 #include "core/nes.hpp"
 #include "core/tools.hpp"
+#include "emu/nes.hpp"
 #include <functional>
+#include <map>
+#include <memory>
 #include <optional>
+#ifndef __EMSCRIPTEN__
+#include "mcp/server.hpp"
+#endif
 namespace tzj {
 class Editor {
   public:
@@ -24,10 +30,37 @@ class Editor {
     bool fullscreen() const { return fullscreen_; }
     void set_fullscreen(bool value) { fullscreen_ = value; }
     void set_status(std::string message) { status_ = std::move(message); }
+    void start_nes_preview() {
+        show_emulator_ = true;
+        boot_emulator();
+    }
+#ifndef __EMSCRIPTEN__
+    void configure_mcp(std::filesystem::path executable) {
+        mcp_executable_ = std::move(executable);
+    }
+    void start_mcp();
+#endif
 
   private:
+#ifndef __EMSCRIPTEN__
+    std::unique_ptr<mcp::Server> mcp_server_;
+    std::filesystem::path mcp_executable_;
+    bool show_mcp_{};
+    void mcp_window();
+    void poll_mcp();
+#endif
     enum class Workspace { Draw, Tiles, Sprites, Animate, Export };
-    Workspace workspace_{Workspace::Draw};
+    bool show_tiles_{}, show_timeline_{}, show_hardware_{};
+    bool show_emulator_{}, emulator_running_{}, emulator_auto_{true};
+    std::unique_ptr<emu::Nes> emulator_;
+    unsigned int emulator_texture_{};
+    std::vector<Byte> emulator_rom_;
+    std::string emulator_error_;
+    std::uint64_t render_revision_{}, emulator_revision_{};
+    double next_emulator_frame_{}, emulator_changed_at_{};
+    void emulator_window();
+    void boot_emulator();
+    void upload_emulator();
     bool guidance_{true}, advanced_panels_{}, fullscreen_{};
     void choose_workspace(Workspace);
     struct PanelRect {
@@ -37,12 +70,12 @@ class Editor {
     bool force_layout_{};
     int fit_countdown_{3};
     void guided_workspace();
-    void selection_inspector();
     void place_panel(const PanelRect &);
     const char *tool_label() const;
     void new_project();
+    void info_windows();
+    bool show_project_info_{}, show_drawing_guide_{}, show_scene_preview_{}, show_brush_settings_{};
     void start_screen();
-    void next_steps();
     void add_blank_sprite();
     bool welcome_{true}, focus_sprite_{};
     enum class Tool {
@@ -119,8 +152,8 @@ class Editor {
     Tile selected_tile_{};
     bool tile_selected_{}, edit_linked_tiles_{true}, tile_edit_stroke_{};
     int selected_tile_x_{}, selected_tile_y_{};
-    void tiles(bool embedded = false);
-    void brush_controls(bool embedded = false);
+    void tiles(bool embedded = false, bool *open = nullptr);
+    void brush_controls(bool embedded = false, bool *open = nullptr);
     void transform_captured_brush(BrushTransform);
     void edit_selected_tile(const Tile &);
     void changed();
@@ -137,9 +170,16 @@ class Editor {
     int palette_edit_group_{}, palette_edit_index_{};
     void canvas();
     void layers(bool embedded = false);
-    void preview();
-    void timeline();
-    void hardware(bool embedded = false);
+    void layer_stack();
+    void layer_properties();
+    void layer_action(int action, int index, bool sprite);
+    bool target_editable(bool warn = true);
+    std::optional<std::filesystem::file_time_type> layer_watch_time_;
+    double next_layer_watch_{};
+    std::map<std::string, std::filesystem::file_time_type> layer_source_times_;
+    void preview(bool *open = nullptr);
+    void timeline(bool *open = nullptr);
+    void hardware(bool embedded = false, bool *open = nullptr);
     void attributes();
     void sprite_sheet(bool embedded = false);
     void palette_effect();

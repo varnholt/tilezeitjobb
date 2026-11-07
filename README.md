@@ -28,8 +28,8 @@ The screenshots show STARFALL, the original space-shooter example included with 
 ## First picture
 
 Choose **Draw a background**, **Create a sprite**, or **Import a picture** on the starting screen.
-Pick a paint color on the left, choose Pencil, and draw in the center. The **What next?** panel explains
-the current workflow and NES color limits. **Save** keeps an editable project; **Export NES** produces
+Pick a layer on the right, a paint color and tool on the left, and draw in the center.
+Hover controls for explanations. **Save** keeps an editable project; **Export NES** produces
 a ROM for an emulator. Use **Help > Start here** to reopen the starting choices.
 
 A new sprite starts blank with three paint colors and transparency. No sprite sheet is required.
@@ -44,14 +44,10 @@ tilezeitjobb --demo --fullscreen
 
 The editor starts maximized. F11 switches between fullscreen and the previous window state.
 
-The action bar contains New, Open, Save, Import and Export NES. The numbered workflow follows a scene from scenery to a runnable ROM:
-
-| Mode | Workspace |
-|---|---|
-| 1. Background | draw or import scenery; use Edit background tiles for repeated patterns |
-| 2. Sprites | place characters, effects and highlights over the existing background |
-| 3. Animate | duplicate frames and preview timed animation |
-| 4. Export | check hardware limits and compile the current frame into a NES ROM |
+Use **File** to create, open, save, import or export artwork. Select a background layer or sprite
+in the layer stack to edit it; the paint colors, tools and properties follow your selection.
+**View → Tile editor**, **Animation timeline** and **NES limits** open optional panels without changing
+your editing target. **View → Fullscreen** (F11) switches the desktop window to fullscreen.
 
 Click a color swatch to choose paint; right-click it to edit the NES color. The active tool and paint color are also
 shown above the canvas. View > Advanced layout exposes the dockable workspace, including attribute inspection,
@@ -100,6 +96,37 @@ Color-set management lives in **Edit color sets...**, beside the paint swatches.
 editor for hardware colors, set copying and indexed slot swaps. Hover controls and technical readouts
 for explanations, including disabled options.
 
+## Layers
+
+The layer stack shows sprites above the background group. Background layers are listed from top to bottom,
+with thumbnails, visibility and lock controls. Drag rows to reorder them within their group. Use the
+**Layers** menu or a row's context menu to duplicate, merge or delete layers.
+
+Imported images retain their original pixels. Select an image layer to adjust its crop, size, position,
+brightness, contrast and dithering. Conversion supports Bayer 2x2, 4x4 and 8x8, Floyd–Steinberg, Atkinson,
+or no dithering. **Make paintable copy** captures the converted result as an independent paint layer;
+the source layer remains available for other variants. Erasing paint reveals the layers underneath.
+
+Background layers share the scene's NES color sets and 16x16 attribute regions. Only visible artwork
+contributes to scene export. Layers and modifiers are saved in the project and participate in undo/redo.
+
+## MCP connection
+
+In the desktop editor, open **Tools → MCP server...**, select **Start server**, then
+**Copy connection configuration**. Add that stdio server definition to your MCP client's configuration.
+Keep the editor open while connected.
+
+The connection controls the project visible in the editor. Available tools inspect layers and sprites,
+return PNG previews, create/import and duplicate layers, adjust image dithering, paint pixel batches,
+add sprites, undo/redo, validate NES limits and export ROMs and assets. Successful artwork changes appear
+immediately and form one undo step each; rejected edits leave the project and undo history unchanged.
+Background-layer indices are zero based, bottom to top, as reported by `get_project`.
+
+The server is off at startup. It accepts one client at a time through an authenticated local connection;
+the client launches the same executable with `--mcp-connect PORT TOKEN` as its stdio relay. **Stop server**
+disconnects the client. Restarting generates a new token, so copy the configuration again. Desktop MCP
+is not available in the GitHub Pages editor. Advanced users can start the desktop server with `--mcp`.
+
 ## NES export
 
 Export NES writes the current frame as a mapper-0 NROM-128 cartridge image. It includes a 6502 startup routine,
@@ -140,6 +167,25 @@ requires a matching board and programmer. Emulator boot and rendering are tested
 
 The exporter rejects scenes outside these limits and unsafe color `$0D`. RGB appearance varies between console
 revisions, video signals and emulator palette settings. The editor can preview sprite limits and highlight color regions.
+
+## Built-in NES preview
+
+Open **View → NES preview** and select **Run current artwork**. The editor compiles the current frame
+into a ROM in memory and boots it in its own small C++ emulator. **Pause**, **Step frame** and **Reset ROM**
+control cartridge execution. **Rebuild after edits** refreshes the ROM when painting finishes; invalid
+artwork keeps the last working ROM visible. The display uses integer scaling and sharp pixels.
+
+The same core runs on desktop and WebAssembly, with no external emulator dependency. It implements
+documented 6502 instructions, NROM mapping, PPU registers and video, vblank/NMI, OAM DMA, sprite priority,
+flipping and the eight-sprites-per-scanline limit. It is focused on the exported artwork ROMs: audio,
+controller input, unofficial opcodes, banked mappers and cycle-exact PPU fetch behavior are not implemented.
+The ordinary editing canvas remains a direct artwork view. Timeline animation is not yet compiled into the ROM.
+
+![Built-in NES preview running the exported demo ROM](docs/images/nes-preview.png)
+
+```sh
+tilezeitjobb --demo --nes-preview
+```
 
 ## Command line
 
@@ -219,7 +265,7 @@ up to 32 snapshots with a 64 MiB history target.
 
 The original QSettings INI `.tzj` format is also accepted. Its referenced images must still exist; relative paths
 resolve beside the project. Legacy RGB colors are mapped to NES color codes, and image dimensions infer a two-screen
-layout. Check that layout after import, since the old project format did not store it. Saving writes version 2,
+layout. Check that layout after import, since the old project format did not store it. Saving writes version 3,
 which the original Qt application cannot read. Loading alone does not modify the original file.
 
 ## Tests
@@ -229,15 +275,24 @@ which the original Qt application cannot read. Loading alone does not modify the
 | Core | CHR bitplanes, deduplication, attribute packing and screen boundaries, OAM, ROM headers/vectors, file roundtrips, legacy import and hardware-limit rejection |
 | Drawing tools | shape rasterization, clipping, filled/outlined ellipses, symmetry, sprite flips, paint masks and undo |
 | Editing workflows | linked tile updates, tile painting, brush rotation and wrapping, palette remapping, selected-color drawing/fill and undo |
-| Emulator integration | five exported scenes booted for 120 frames in pinned JSNES 2.1.0; rendered pixels and all nametable bytes compared with the project data |
+| Layer workflows | compositing, transparency, visibility, locking, modifiers, independent paint copies, layer migration and project roundtrips |
+| MCP | protocol handshake, tool contracts, atomic edits, undo, locks, PNG previews, server lifecycle and authenticated stdio relay |
+| Built-in emulator | documented opcode decoding, arithmetic/stack behavior, PPU registers, mirroring, NMI, scanline limits and cartridge boot; 61,440 pixels and nametable uploads compared for demo, wide/tall and layered sprite scenes |
+| Optional external verification | five exported scenes booted for 120 frames in pinned JSNES 2.1.0; rendered pixels and nametable bytes compared with project data |
 
 ```sh
 ctest --test-dir build -C Release --output-on-failure
+```
+
+Normal builds, tests and GitHub Pages do not install or ship JSNES. An independent check is available
+through the manually run **Optional external ROM verification** GitHub Actions workflow, or locally:
+
+```sh
 npm ci --prefix tests/emulator --ignore-scripts
 node tests/rom_emulator.mjs tests/emulator/node_modules/jsnes/src/index.js build/test-output
 ```
 
-The emulator comparison checks 61,184 pixels per frame. JSNES's pre-render dummy framebuffer row is excluded.
+The optional JSNES comparison checks 61,184 pixels per frame; its pre-render dummy framebuffer row is excluded.
 The desktop smoke test also renders real editor screenshots, for example on Windows:
 
 ```powershell
@@ -251,13 +306,13 @@ The desktop smoke test also renders real editor screenshots, for example on Wind
 | `src/core/` | project model, image conversion, editing operations and NES compiler |
 | `src/app/` | desktop workspace and rendering |
 | `src/cli.cpp` | headless conversion and export commands |
+| `src/mcp/` | optional desktop MCP protocol, editing commands and local connection |
+| `src/emu/` | self-contained C++ CPU, PPU and NROM preview core |
 | `tests/` | core, editing and emulator integration tests |
 | `data/paltesteffect/` | original animated palette-test patterns |
 | `docs/images/` | screenshots rendered by the editor |
 
 ## Not yet
-
-- integrated emulator playback of the compiled ROM (the canvas is currently a direct artwork preview)
 
 - pixel-perfect stroke cleanup, curves and gradient drawing
 - animated ROM playback, sprite-sheet animation export and richer animation editing

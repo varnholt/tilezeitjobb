@@ -1,0 +1,23 @@
+name: Optional external ROM verification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure headless tools
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTZJ_BUILD_EDITOR=OFF
+      - name: Build ROM fixtures
+        run: cmake --build build --parallel 2 --target tzj_tests tzj_workflow_tests
+      - name: Generate ROM fixtures
+        run: ctest --test-dir build --output-on-failure -R '^(core|editing_workflows)$'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install independent test emulator
+        run: npm ci --prefix tests/emulator --ignore-scripts
+      - name: Boot and compare exported ROMs
+        run: node tests/rom_emulator.mjs tests/emulator/node_modules/jsnes/src/index.js build/test-output

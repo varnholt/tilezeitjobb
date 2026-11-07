@@ -17,13 +17,6 @@ jobs:
         run: cmake --build build --config Release --parallel 2
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install emulator
-        run: npm ci --prefix tests/emulator --ignore-scripts
-      - name: Boot exported ROMs
-        run: node tests/rom_emulator.mjs tests/emulator/node_modules/jsnes/src/index.js build/test-output
       - name: Editor smoke test on Linux
         if: runner.os == 'Linux'
         run: xvfb-run -a ./build/tilezeitjobb --demo --smoke-test --screenshot build/editor.png

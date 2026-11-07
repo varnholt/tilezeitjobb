@@ -33,7 +33,7 @@ palettes_done:
     std::array<int, 240> lines{};
     bool position_error = false;
     for (const auto &s : f.sprites)
-        if (s.visible) {
+        if (f.sprites_visible && s.visible) {
             ++count;
             if (s.x < 0 || s.x > 255 || s.y < 1 || s.y > 239)
                 position_error = true;
@@ -48,7 +48,15 @@ palettes_done:
         errors.push_back("More than 8 sprites overlap a scanline; hardware would drop sprites.");
     return errors;
 }
-NesScene compile_scene(const Project &p, std::size_t frame) {
+NesScene compile_scene(const Project &input, std::size_t frame) {
+    Project layered;
+    const Project *source = &input;
+    if (!input.frames.at(frame).layers.empty()) {
+        layered = input;
+        layered.compose_layers(frame);
+        source = &layered;
+    }
+    const auto &p = *source;
     auto errors = hardware_errors(p, frame);
     if (!errors.empty())
         throw std::runtime_error(errors.front());
@@ -104,7 +112,7 @@ NesScene compile_scene(const Project &p, std::size_t frame) {
     }
     int index = 0;
     for (const auto &s : f.sprites)
-        if (s.visible) {
+        if (f.sprites_visible && s.visible) {
             const int tile = add(s.pixels, true);
             scene.oam[index * 4] = static_cast<Byte>(s.y - 1);
             scene.oam[index * 4 + 1] = static_cast<Byte>(tile);

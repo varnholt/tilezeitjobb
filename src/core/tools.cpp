@@ -16,7 +16,7 @@ void check_brush(const IndexedBrush &brush) {
         brush.pixels.size() != static_cast<std::size_t>(brush.width) * brush.height)
         throw std::runtime_error("Invalid indexed brush dimensions");
     for (auto value : brush.pixels)
-        if (value > 3)
+        if (value > 3 && value != 255)
             throw std::runtime_error("Invalid brush pixel");
 }
 void ensure_mask(Frame &frame) {
@@ -189,7 +189,10 @@ void flood_fill_sprite(Project &p, std::size_t frame, std::size_t sprite, int x,
                        Byte color) {
     if (color > 3)
         throw std::runtime_error("Invalid NES drawing color");
-    auto &s = p.frames.at(frame).sprites.at(sprite);
+    auto &f = p.frames.at(frame);
+    auto &s = f.sprites.at(sprite);
+    if (!f.sprites_visible || f.sprites_locked || !s.visible || s.locked)
+        throw std::runtime_error("Show and unlock the sprite before painting");
     if (x < 0 || x >= 8 || y < 0 || y >= 8)
         return;
     if (s.flip_x)
@@ -213,12 +216,14 @@ void flood_fill_sprite(Project &p, std::size_t frame, std::size_t sprite, int x,
     }
 }
 void paint_pixels(Project &p, std::size_t frame, const std::vector<PixelPoint> &points, Byte color,
-                  int palette, int sprite) {
+                  int palette, int sprite, bool erase) {
     if (color > 3 || palette < -1 || palette > 3 || sprite < -1)
         throw std::runtime_error("Invalid NES drawing color or layer");
     auto &f = p.frames.at(frame);
     if (sprite >= 0) {
         auto &s = f.sprites.at(sprite);
+        if (!f.sprites_visible || f.sprites_locked || !s.visible || s.locked)
+            throw std::runtime_error("Show and unlock the sprite before painting");
         for (auto [x, y] : points) {
             if (x < 0 || x >= 8 || y < 0 || y >= 8)
                 continue;
@@ -229,11 +234,10 @@ void paint_pixels(Project &p, std::size_t frame, const std::vector<PixelPoint> &
         for (auto [x, y] : points) {
             if (x < 0 || x >= p.width || y < 0 || y >= p.height)
                 continue;
-            f.pixels[y * p.width + x] = color;
-            f.paint_mask[y * p.width + x] = color;
-            if (palette >= 0)
-                f.attributes[(y / 16) * p.block_width() + x / 16] = Byte(palette);
+            p.write_background_pixel(frame, y * p.width + x,
+                                     erase && !f.layers.empty() ? Byte(255) : color, palette);
         }
+        p.compose_layers(frame);
     }
 }
 Tile read_tile(const Project &project, std::size_t frame, int tx, int ty) {
@@ -268,9 +272,9 @@ void stamp_tile(Project &project, std::size_t frame, int tx, int ty, const Tile 
     for (int y = 0; y < 8; ++y)
         for (int x = 0; x < 8; ++x) {
             auto index = (ty * 8 + y) * project.width + tx * 8 + x;
-            f.pixels[index] = tile[y * 8 + x];
-            f.paint_mask[index] = tile[y * 8 + x];
+            project.write_background_pixel(frame, index, tile[y * 8 + x]);
         }
+    project.compose_layers(frame);
 }
 std::size_t replace_tile(Project &project, std::size_t frame, const Tile &original,
                          const Tile &replacement) {
@@ -313,10 +317,10 @@ IndexedBrush capture_brush(const Project &project, std::size_t frame, int x, int
     if (w < 1 || h < 1 || w > project.width || h > project.height || x < 0 || y < 0 ||
         x > project.width - w || y > project.height - h)
         throw std::runtime_error("Selection outside the canvas");
-    const auto &f = project.frames.at(frame);
+    const auto &source = project.active_pixels(frame);
     IndexedBrush result{w, h, std::vector<Byte>(w * h)};
     for (int row = 0; row < h; ++row)
-        std::copy_n(f.pixels.begin() + (y + row) * project.width + x, w,
+        std::copy_n(source.begin() + (y + row) * project.width + x, w,
                     result.pixels.begin() + row * w);
     return result;
 }
@@ -356,7 +360,7 @@ void stamp_brush(Project &p, std::size_t frame, int x, int y, const IndexedBrush
     for (int by = 0; by < brush.height; ++by)
         for (int bx = 0; bx < brush.width; ++bx) {
             Byte c = brush.pixels[by * brush.width + bx];
-            if (transparent && c == 0)
+            if (c == 255 || (transparent && c == 0))
                 continue;
             long long px = static_cast<long long>(x) + bx, py = static_cast<long long>(y) + by;
             if (wrap) {
@@ -366,9 +370,9 @@ void stamp_brush(Project &p, std::size_t frame, int x, int y, const IndexedBrush
             if (px < 0 || py < 0 || px >= p.width || py >= p.height)
                 continue;
             auto index = static_cast<std::size_t>(py) * p.width + static_cast<std::size_t>(px);
-            f.pixels[index] = c;
-            f.paint_mask[index] = c;
+            p.write_background_pixel(frame, index, c);
         }
+    p.compose_layers(frame);
 }
 void swap_palette_slots(Project &project, bool sprites, int palette, int a, int b, bool preserve) {
     if (palette < 0 || palette > 3 || a < 1 || a > 3 || b < 1 || b > 3)
@@ -396,7 +400,13 @@ void swap_palette_slots(Project &project, bool sprites, int palette, int a, int 
                         f.pixels[i] = remap(f.pixels[i]);
                         if (!f.paint_mask.empty())
                             f.paint_mask[i] = remap(f.paint_mask[i]);
+                        for (auto &layer : f.layers)
+                            if (layer.kind == LayerKind::Paint)
+                                layer.pixels[i] = remap(layer.pixels[i]);
                     }
     }
+    if (!sprites)
+        for (std::size_t i = 0; i < project.frames.size(); ++i)
+            project.compose_layers(i);
 }
 } // namespace tzj

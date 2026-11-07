@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="data:,">
-<title>tilezeitjobb — NES pixel studio</title>
+<title>tilezeitjobb â€” NES pixel studio</title>
 <meta name="description" content="Draw NES pixel art, edit tiles and sprites, and download runnable NES ROMs in your browser.">
 <style>
 *{box-sizing:border-box}html,body{margin:0;height:100%;background:#10141a;color:#dce4ea;font:14px system-ui,sans-serif}
@@ -12,8 +12,8 @@ canvas{display:block;width:100%;height:100%;position:absolute;inset:0;outline:no
 #status[hidden]{display:none}#help{padding:10px 16px;background:#18232c;line-height:1.6}#help[hidden]{display:none}
 </style></head><body>
 <header><strong>tilezeitjobb</strong><span>NES pixel studio</span><button id="fullscreen">Fullscreen</button><button id="help-toggle">Help</button><a href="https://github.com/varnholt/tilezeitjobb" target="_blank" rel="noopener">Source &amp; desktop build</a></header>
-<div id="help" hidden>Use a mouse and keyboard. Open loads a project; Import loads a background image or sprite sheet, depending on the editing mode. Save downloads your project. Export NES downloads a ZIP containing a runnable .nes ROM and its raw assets. Work is also autosaved in this browser. Clear browser data to remove it.</div>
-<main id="studio"><div id="status" role="status">Loading the pixel studio…</div><canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()" aria-label="NES pixel editor"></canvas></main>
+<div id="help" hidden>Use a mouse and keyboard. Select a layer on the right and a color and tool on the left. File contains project, image import and export commands. View contains optional panels, including NES preview. Save downloads your project. Export NES downloads a ZIP containing a runnable .nes ROM and its raw assets. Work is also autosaved in this browser. Clear browser data to remove it.</div>
+<main id="studio"><div id="status" role="status">Loading the pixel studioâ€¦</div><canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()" aria-label="NES pixel editor"></canvas></main>
 <script>
 var Module = {
   canvas: document.getElementById('canvas'),

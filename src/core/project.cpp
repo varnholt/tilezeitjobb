@@ -67,11 +67,24 @@ void Project::resize(int w, int h) {
                             mask.begin() + y * w);
             f.paint_mask = std::move(mask);
         }
+        for (auto &layer : f.layers) {
+            if (layer.kind == LayerKind::Paint) {
+                std::vector<Byte> resized(static_cast<std::size_t>(w) * h, 255);
+                for (int y = 0; y < std::min(h, height); ++y)
+                    std::copy_n(layer.pixels.begin() + y * width, std::min(w, width),
+                                resized.begin() + y * w);
+                layer.pixels = std::move(resized);
+            }
+            layer.converted.clear();
+            layer.conversion_stamp = 0;
+        }
         f.pixels = std::move(p);
         f.attributes = std::move(a);
     }
     width = w;
     height = h;
+    for (std::size_t i = 0; i < frames.size(); ++i)
+        compose_layers(i);
 }
 void Project::set_backdrop(Byte c) {
     if (c >= 64)
@@ -113,6 +126,35 @@ void Project::validate() const {
         for (auto b : f.paint_mask)
             fail(b > 3 && b != 255, "Invalid paint mask value");
         fail(f.duration_ms < 10 || f.duration_ms > 60000, "Frame duration must be 10 to 60000 ms");
+        fail(f.layers.size() > 64, "Too many background layers");
+        fail(!f.layers.empty() && (f.active_layer < 0 || f.active_layer >= int(f.layers.size())),
+             "Invalid active background layer");
+        for (const auto &l : f.layers) {
+            fail(l.name.size() > 4096 || l.source_path.size() > 32768,
+                 "Layer text exceeds project limits");
+            fail(l.kind != LayerKind::Paint && l.kind != LayerKind::Image, "Invalid layer type");
+            if (l.kind == LayerKind::Paint) {
+                fail(l.pixels.size() != f.pixels.size(), "Invalid paint layer dimensions");
+                for (auto c : l.pixels)
+                    fail(c > 3 && c != 255, "Invalid indexed layer pixel");
+            } else {
+                fail(l.source.width < 1 || l.source.height < 1 || l.source.width > 4096 ||
+                         l.source.height > 4096 ||
+                         l.source.rgba.size() != std::size_t(l.source.width) * l.source.height * 4,
+                     "Invalid layer source image");
+            }
+            const auto &m = l.modifiers;
+            for (int v :
+                 {m.crop_x, m.crop_y, m.crop_width, m.crop_height, m.output_width, m.output_height})
+                fail(v < 0 || v > 4096, "Invalid crop or resize dimensions");
+            fail(m.offset_x < -4096 || m.offset_x > 4096 || m.offset_y < -4096 || m.offset_y > 4096,
+                 "Invalid image layer position");
+            fail(m.brightness < -100 || m.brightness > 100 || m.contrast < -100 ||
+                     m.contrast > 100 || m.strength < 0 || m.strength > 100,
+                 "Invalid image modifier amount");
+            fail(int(m.dither) < 0 || int(m.dither) > int(DitherMode::Atkinson),
+                 "Invalid dithering method");
+        }
         fail(f.sprites.size() > 4096, "Too many sprite objects");
         for (auto p : f.pixels)
             fail(p > 3, "Pixel index outside 0..3");
@@ -129,6 +171,29 @@ void Project::validate() const {
     }
 }
 void Project::quantize(std::size_t frame, bool auto_palettes) {
+    if (!frames.at(frame).layers.empty()) {
+        auto &f = frames[frame];
+        int target = f.active_layer;
+        if (target < 0 || f.layers.at(target).kind != LayerKind::Image) {
+            target = -1;
+            for (int i = int(f.layers.size()) - 1; i >= 0; --i)
+                if (f.layers[i].kind == LayerKind::Image) {
+                    target = i;
+                    break;
+                }
+        }
+        if (target < 0)
+            throw std::runtime_error("Choose an imported image layer");
+        auto &l = f.layers[target];
+        if (!reference.empty() && l.source_path == image_path)
+            l.source = reference;
+        l.conversion_stamp = 0;
+        if (auto_palettes)
+            fit_layer_colors(frame, std::size_t(target));
+        else
+            compose_layers(frame, true);
+        return;
+    }
     if (reference.empty())
         throw std::runtime_error("Import a reference image first");
     auto &f = frames.at(frame);
@@ -234,7 +299,10 @@ void Project::generate_sprites(std::size_t frame, int pal) {
     f.sprites = std::move(generated);
 }
 Image Project::render(std::size_t index, bool sprites, bool hardware_limits) const {
-    const auto &f = frames.at(index);
+    Frame flattened;
+    if (!frames.at(index).layers.empty())
+        flattened = composed_frame(index);
+    const auto &f = frames.at(index).layers.empty() ? frames.at(index) : flattened;
     Image im{width, height, std::vector<Byte>(width * height * 4)};
     auto set = [&](int x, int y, Color c) {
         const auto i = (y * width + x) * 4;
@@ -248,7 +316,7 @@ Image Project::render(std::size_t index, bool sprites, bool hardware_limits) con
             set(x, y,
                 nes_colors[background[f.attributes[(y / 16) * block_width() + x / 16]]
                                      [f.pixels[y * width + x]]]);
-    if (sprites) {
+    if (sprites && f.sprites_visible) {
         // OAM priority: lower object index wins, including transparent-background priority.
         std::vector<bool> claimed(width * height);
         std::array<int, 480> scanlines{};
@@ -299,11 +367,7 @@ void paint_line(Project &p, std::size_t frame, int x0, int y0, int x1, int y1, B
         for (int yy = y0 - size / 2; yy < y0 - size / 2 + size; ++yy)
             for (int xx = x0 - size / 2; xx < x0 - size / 2 + size; ++xx)
                 if (xx >= 0 && yy >= 0 && xx < p.width && yy < p.height) {
-                    f.pixels[yy * p.width + xx] = c;
-                    f.paint_mask[yy * p.width + xx] = c;
-                    if (palette >= 0)
-                        f.attributes[(yy / 16) * p.block_width() + xx / 16] =
-                            static_cast<Byte>(palette);
+                    p.write_background_pixel(frame, yy * p.width + xx, c, palette);
                 }
         if (x0 == x1 && y0 == y1)
             break;
@@ -317,14 +381,17 @@ void paint_line(Project &p, std::size_t frame, int x0, int y0, int x1, int y1, B
             y0 += sy;
         }
     }
+    p.compose_layers(frame);
 }
-void flood_fill(Project &p, std::size_t frame, int x, int y, Byte c, int palette) {
+void flood_fill(Project &p, std::size_t frame, int x, int y, Byte c, int palette, bool erase) {
     if (x < 0 || y < 0 || x >= p.width || y >= p.height || c > 3 || palette < -1 || palette > 3)
         return;
     auto &f = p.frames.at(frame);
-    Byte old = f.pixels[y * p.width + x],
+    const auto source = p.active_pixels(frame);
+    const Byte value = erase && !f.layers.empty() ? Byte(255) : c;
+    Byte old = source[y * p.width + x],
          old_palette = f.attributes[(y / 16) * p.block_width() + x / 16];
-    if (old == c && (palette < 0 || palette == old_palette))
+    if (old == value && (palette < 0 || palette == old_palette))
         return;
     std::vector<bool> visited(f.pixels.size());
     std::vector<int> changed;
@@ -340,7 +407,7 @@ void flood_fill(Project &p, std::size_t frame, int x, int y, Byte c, int palette
             if (nx < 0 || ny < 0 || nx >= p.width || ny >= p.height)
                 continue;
             int index = ny * p.width + nx;
-            if (!visited[index] && f.pixels[index] == old &&
+            if (!visited[index] && source[index] == old &&
                 f.attributes[(ny / 16) * p.block_width() + nx / 16] == old_palette) {
                 visited[index] = true;
                 queue.push({nx, ny});
@@ -350,12 +417,9 @@ void flood_fill(Project &p, std::size_t frame, int x, int y, Byte c, int palette
     if (f.paint_mask.empty())
         f.paint_mask.assign(f.pixels.size(), 255);
     for (auto index : changed) {
-        f.pixels[index] = c;
-        f.paint_mask[index] = c;
-        if (palette >= 0)
-            f.attributes[(index / p.width / 16) * p.block_width() + (index % p.width) / 16] =
-                static_cast<Byte>(palette);
+        p.write_background_pixel(frame, index, value, palette);
     }
+    p.compose_layers(frame);
 }
 
 static std::string hex(const std::vector<Byte> &data) {
@@ -395,10 +459,15 @@ static Image read_image(const Json &j) {
         throw std::runtime_error("Invalid embedded image dimensions");
     return {w, h, unhex(j.at("rgba"), static_cast<std::size_t>(w) * h * 4)};
 }
-void save_project(const std::filesystem::path &path, const Project &p) {
+void save_project(const std::filesystem::path &path, const Project &input) {
+    input.validate();
+    auto snapshot = input;
+    for (std::size_t i = 0; i < snapshot.frames.size(); ++i)
+        snapshot.compose_layers(i);
+    const auto &p = snapshot;
     p.validate();
     Json j{{"format", "tilezeitjobb"},
-           {"version", 2},
+           {"version", 3},
            {"width", p.width},
            {"height", p.height},
            {"offset_x", p.offset_x},
@@ -424,11 +493,46 @@ void save_project(const std::filesystem::path &path, const Project &p) {
                                {"flip_x", s.flip_x},
                                {"flip_y", s.flip_y},
                                {"behind", s.behind},
+                               {"locked", s.locked},
                                {"pixels", s.pixels}});
+        Json layers = Json::array();
+        for (const auto &l : f.layers) {
+            const auto &m = l.modifiers;
+            layers.push_back({{"name", l.name},
+                              {"kind", int(l.kind)},
+                              {"visible", l.visible},
+                              {"locked", l.locked},
+                              {"effects_enabled", l.effects_enabled},
+                              {"pixels", hex(l.pixels)},
+                              {"source", image_json(l.source)},
+                              {"source_path", l.source_path},
+                              {"modifiers",
+                               {{"transform_enabled", m.transform_enabled},
+                                {"color_enabled", m.color_enabled},
+                                {"dither_enabled", m.dither_enabled},
+                                {"crop_x", m.crop_x},
+                                {"crop_y", m.crop_y},
+                                {"crop_width", m.crop_width},
+                                {"crop_height", m.crop_height},
+                                {"output_width", m.output_width},
+                                {"output_height", m.output_height},
+                                {"offset_x", m.offset_x},
+                                {"offset_y", m.offset_y},
+                                {"brightness", m.brightness},
+                                {"contrast", m.contrast},
+                                {"strength", m.strength},
+                                {"dither", int(m.dither)}}}});
+        }
         j["frames"].push_back({{"pixels", hex(f.pixels)},
                                {"paint_mask", hex(f.paint_mask)},
                                {"attributes", f.attributes},
                                {"duration_ms", f.duration_ms},
+                               {"active_layer", f.active_layer},
+                               {"background_visible", f.background_visible},
+                               {"background_locked", f.background_locked},
+                               {"sprites_visible", f.sprites_visible},
+                               {"sprites_locked", f.sprites_locked},
+                               {"layers", layers},
                                {"sprites", sprites}});
     }
     auto serialized = j.dump(2);
@@ -555,7 +659,7 @@ Project load_project(const std::filesystem::path &path) {
     if (text[start] != '{')
         return read_legacy(text, path);
     const auto j = Json::parse(text);
-    if (j.at("format") != "tilezeitjobb" || j.at("version") != 2)
+    if (j.at("format") != "tilezeitjobb" || (j.at("version") != 2 && j.at("version") != 3))
         throw std::runtime_error("Unsupported project format/version");
     Project p;
     p.resize(checked_int(j.at("width"), 256, 512), checked_int(j.at("height"), 240, 480));
@@ -597,12 +701,56 @@ Project load_project(const std::filesystem::path &path) {
             s.flip_x = js.at("flip_x");
             s.flip_y = js.at("flip_y");
             s.behind = js.at("behind");
+            s.locked = js.value("locked", false);
             byte_array(js.at("pixels"), 64, 3);
             s.pixels = js.at("pixels").get<Tile>();
             f.sprites.push_back(std::move(s));
         }
+        if (jf.contains("layers")) {
+            const auto &layers = jf.at("layers");
+            if (!layers.is_array() || layers.size() > 64)
+                throw std::runtime_error("Too many background layers");
+            for (const auto &jl : layers) {
+                BackgroundLayer l;
+                l.name = jl.at("name");
+                l.kind = static_cast<LayerKind>(checked_int(jl.at("kind"), 0, 1));
+                l.visible = jl.at("visible");
+                l.locked = jl.at("locked");
+                l.effects_enabled = jl.value("effects_enabled", true);
+                if (l.kind == LayerKind::Paint)
+                    l.pixels = unhex(jl.at("pixels"), f.pixels.size());
+                l.source = read_image(jl.at("source"));
+                l.source_path = jl.value("source_path", "");
+                const auto &jm = jl.at("modifiers");
+                auto &m = l.modifiers;
+                m.transform_enabled = jm.at("transform_enabled");
+                m.color_enabled = jm.at("color_enabled");
+                m.dither_enabled = jm.at("dither_enabled");
+                m.crop_x = checked_int(jm.at("crop_x"), 0, 4096);
+                m.crop_y = checked_int(jm.at("crop_y"), 0, 4096);
+                m.crop_width = checked_int(jm.at("crop_width"), 0, 4096);
+                m.crop_height = checked_int(jm.at("crop_height"), 0, 4096);
+                m.output_width = checked_int(jm.at("output_width"), 0, 4096);
+                m.output_height = checked_int(jm.at("output_height"), 0, 4096);
+                m.offset_x = checked_int(jm.at("offset_x"), -4096, 4096);
+                m.offset_y = checked_int(jm.at("offset_y"), -4096, 4096);
+                m.brightness = checked_int(jm.at("brightness"), -100, 100);
+                m.contrast = checked_int(jm.at("contrast"), -100, 100);
+                m.strength = checked_int(jm.at("strength"), 0, 100);
+                m.dither = static_cast<DitherMode>(checked_int(jm.at("dither"), 0, 5));
+                f.layers.push_back(std::move(l));
+            }
+            f.active_layer = checked_int(jf.at("active_layer"), -1, 63);
+            f.background_visible = jf.value("background_visible", true);
+            f.background_locked = jf.value("background_locked", false);
+            f.sprites_visible = jf.value("sprites_visible", true);
+            f.sprites_locked = jf.value("sprites_locked", false);
+        }
         p.frames.push_back(std::move(f));
     }
+    p.validate();
+    for (std::size_t i = 0; i < p.frames.size(); ++i)
+        p.compose_layers(i);
     p.validate();
     return p;
 }
@@ -829,6 +977,9 @@ void History::checkpoint(const Project &p) {
         for (const auto &f : it->frames)
             bytes += f.pixels.size() + f.paint_mask.size() + f.attributes.size() +
                      f.sprites.size() * sizeof(Sprite);
+        for (const auto &f : it->frames)
+            for (const auto &l : f.layers)
+                bytes += l.pixels.size() + l.converted.size() + l.source.rgba.size();
     }
     while (past_.size() > 1 && (past_.size() > 32 || bytes > 64 * 1024 * 1024)) {
         const auto &old = past_.front();
@@ -836,6 +987,9 @@ void History::checkpoint(const Project &p) {
         for (const auto &f : old.frames)
             bytes -= f.pixels.size() + f.paint_mask.size() + f.attributes.size() +
                      f.sprites.size() * sizeof(Sprite);
+        for (const auto &f : old.frames)
+            for (const auto &l : f.layers)
+                bytes -= l.pixels.size() + l.converted.size() + l.source.rgba.size();
         past_.erase(past_.begin());
     }
 }

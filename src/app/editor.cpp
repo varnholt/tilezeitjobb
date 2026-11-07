@@ -50,14 +50,20 @@ static void upload(unsigned int &id, const Image &image) {
 }
 Editor::Editor(std::filesystem::path data_directory) : data_directory_(std::move(data_directory)) {
     browse_dir_ = std::filesystem::current_path();
+    project.ensure_layers(0);
 }
 Editor::~Editor() {
-    for (auto id :
-         {texture_, sheet_texture_, reference_texture_, previous_texture_, effect_texture_})
+#ifndef __EMSCRIPTEN__
+    if (mcp_server_)
+        mcp_server_->stop();
+#endif
+    for (auto id : {texture_, sheet_texture_, reference_texture_, previous_texture_,
+                    effect_texture_, emulator_texture_})
         if (id)
             glDeleteTextures(1, &id);
 }
 void Editor::changed() {
+    project.compose_layers(frame_);
     dirty_ = true;
     refresh_ = true;
 }
@@ -77,6 +83,7 @@ void Editor::set_demo() {
     welcome_ = false;
     cancel_drawing();
     project = demo_project();
+    project.ensure_layers(0);
     selected_tile_ = read_tile(project, 0, 0, 0);
     tile_selected_ = true;
     selected_tile_x_ = selected_tile_y_ = 0;
@@ -91,6 +98,8 @@ void Editor::open(const std::filesystem::path &path) {
     welcome_ = false;
     cancel_drawing();
     project = std::move(loaded);
+    for (std::size_t i = 0; i < project.frames.size(); ++i)
+        project.ensure_layers(i);
     project_path_ = path;
     frame_ = 0;
     layer_ = -1;
@@ -189,11 +198,17 @@ void Editor::perform_file(const std::filesystem::path &path) {
         case FileAction::Background: {
             auto im = load_image(path);
             checkpoint();
-            project.reference = std::move(im);
+            project.reference = im;
             project.image_path = path_to_utf8(path);
-            project.quantize(frame_);
+            project.add_image_layer(frame_, std::move(im), path_to_utf8(path.filename()),
+                                    project.image_path);
+            project.add_paint_layer(frame_, "Paint corrections");
+            layer_ = -1;
+            palette_group_ = 0;
+            tool_ = Tool::Pencil;
             changed();
-            status_ = "Imported background; use Auto palettes to fit its colors";
+            status_ = "Imported as a live image layer. Select its row to adjust conversion, or "
+                      "paint on the corrections layer.";
             break;
         }
         case FileAction::Sprites: {
@@ -354,6 +369,8 @@ void Editor::refresh_textures() {
         selected_tile_ = read_tile(project, frame_, selected_tile_x_, selected_tile_y_);
     }
     refresh_ = false;
+    ++render_revision_;
+    emulator_changed_at_ = ImGui::GetTime();
 }
 void Editor::dock_layout() {
     if (!advanced_panels_)
@@ -391,9 +408,9 @@ void Editor::dock_layout() {
 }
 void Editor::choose_workspace(Workspace workspace) {
     cancel_drawing();
-    workspace_ = workspace;
     fit_countdown_ = 1;
     if (workspace == Workspace::Tiles) {
+        show_tiles_ = true;
         tool_ = Tool::TileBrush;
         layer_ = -1;
         palette_group_ = 0;
@@ -404,9 +421,12 @@ void Editor::choose_workspace(Workspace workspace) {
         focus_panel("Layers & sprites");
         focus_panel("Sprite sheet");
     } else if (workspace == Workspace::Export) {
+        show_hardware_ = true;
         tool_ = Tool::Pan;
         focus_panel("Hardware");
     } else {
+        if (workspace == Workspace::Animate)
+            show_timeline_ = true;
         tool_ = Tool::Pencil;
         layer_ = -1;
         palette_group_ = 0;
@@ -436,6 +456,8 @@ void Editor::menus() {
             if (ui::MenuItem("Export PNG..."))
                 file_dialog(FileAction::Png);
             ImGui::Separator();
+            if (ui::MenuItem("Project information..."))
+                show_project_info_ = true;
             if (ui::MenuItem("Quit"))
                 request_close();
             ImGui::EndMenu();
@@ -462,6 +484,87 @@ void Editor::menus() {
                 copy_selection(true);
             if (ui::MenuItem("Paste brush", "Ctrl+V", false, !clipboard_.empty()))
                 tool_ = Tool::Stamp;
+            ImGui::Separator();
+            if (ui::MenuItem("Select area", "R")) {
+                tool_ = Tool::Select;
+                layer_ = -1;
+            }
+            if (ui::MenuItem("Deselect", nullptr, false, selection_.width > 0))
+                selection_ = {};
+            if (ImGui::BeginMenu("Captured brush", !clipboard_.empty())) {
+                if (ui::MenuItem("Rotate left"))
+                    transform_captured_brush(BrushTransform::RotateCCW);
+                if (ui::MenuItem("Rotate right"))
+                    transform_captured_brush(BrushTransform::RotateCW);
+                if (ui::MenuItem("Flip horizontal"))
+                    transform_captured_brush(BrushTransform::FlipX);
+                if (ui::MenuItem("Flip vertical"))
+                    transform_captured_brush(BrushTransform::FlipY);
+                if (ui::MenuItem("Brush settings..."))
+                    show_brush_settings_ = true;
+                ImGui::EndMenu();
+            }
+            if (ui::MenuItem("Edit color sets...")) {
+                palette_edit_group_ = palette_group_;
+                palette_edit_index_ = palette_;
+                palette_editor_open_ = true;
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Layers")) {
+            auto &f = project.frames[frame_];
+            const bool sprite = layer_ >= 0;
+            const int selected = sprite ? layer_ : f.active_layer;
+            if (ui::MenuItem("New paint layer", nullptr, false, !f.background_locked)) {
+                checkpoint();
+                project.add_paint_layer(frame_);
+                layer_ = -1;
+                palette_group_ = 0;
+                tool_ = Tool::Pencil;
+                changed();
+            }
+            if (ui::MenuItem("Import image layer...", nullptr, false, !f.background_locked))
+                file_dialog(FileAction::Background);
+            if (ui::MenuItem("New sprite", nullptr, false, !f.sprites_locked))
+                add_blank_sprite();
+            ImGui::Separator();
+            if (ui::MenuItem("Duplicate layer", nullptr, false, selected >= 0))
+                layer_action(0, selected, sprite);
+            bool image = !sprite && selected >= 0 && f.layers.at(selected).kind == LayerKind::Image;
+            if (ui::MenuItem("Make paintable copy", nullptr, false, image))
+                layer_action(1, selected, false);
+            if (ui::MenuItem("Merge down", nullptr, false, !sprite && selected > 0))
+                layer_action(3, selected, false);
+            if (ui::MenuItem("Delete layer", nullptr, false,
+                             selected >= 0 && (sprite || f.layers.size() > 1)))
+                layer_action(2, selected, sprite);
+            ImGui::Separator();
+            if (ui::MenuItem("Move up", nullptr, false,
+                             selected >= 0 &&
+                                 (sprite ? selected > 0 : selected + 1 < int(f.layers.size()))))
+                layer_action(4, selected, sprite);
+            if (ui::MenuItem("Move down", nullptr, false,
+                             selected >= 0 &&
+                                 (sprite ? selected + 1 < int(f.sprites.size()) : selected > 0)))
+                layer_action(5, selected, sprite);
+            if (ui::MenuItem("Clear layer", nullptr, false,
+                             !sprite && project.paint_layer_editable(frame_))) {
+                checkpoint();
+                project.clear_active_layer(frame_);
+                changed();
+            }
+            if (ui::MenuItem("Fit NES colors to this layer", nullptr, false, image)) {
+                checkpoint();
+                project.fit_layer_colors(frame_, std::size_t(f.active_layer));
+                changed();
+            }
+            if (ui::MenuItem("Generate sprites from sheet", nullptr, false,
+                             !project.sprite_sheet.empty() && !f.sprites_locked)) {
+                checkpoint();
+                project.generate_sprites(frame_, palette_);
+                layer_ = -1;
+                changed();
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Layout")) {
@@ -479,13 +582,32 @@ void Editor::menus() {
         if (ImGui::BeginMenu("View")) {
             ui::MenuItem("Fullscreen", "F11", &fullscreen_);
             ui::MenuItem("Workflow guidance", nullptr, &guidance_);
+            ui::MenuItem("Scene preview", nullptr, &show_scene_preview_);
+            ui::MenuItem("Brush settings", nullptr, &show_brush_settings_);
+            ui::MenuItem("Tile editor", nullptr, &show_tiles_);
+            if (ui::MenuItem("Animation timeline", nullptr, &show_timeline_) && !show_timeline_)
+                playing_ = false;
+            ui::MenuItem("NES limits", nullptr, &show_hardware_);
+            ui::MenuItem("NES preview", nullptr, &show_emulator_);
             if (ui::MenuItem("Advanced layout", nullptr, &advanced_panels_)) {
                 layout_built_ = false;
                 force_layout_ = true;
             }
             ImGui::EndMenu();
         }
+#ifndef __EMSCRIPTEN__
+        if (ImGui::BeginMenu("Tools")) {
+            if (ui::MenuItem("MCP server...", nullptr, mcp_server_ && mcp_server_->running()))
+                show_mcp_ = true;
+            ui::help("MCP server",
+                     "Start or stop a local MCP connection to this editor. Connected clients can "
+                     "inspect, edit, preview and export the open artwork.");
+            ImGui::EndMenu();
+        }
+#endif
         if (ImGui::BeginMenu("Help")) {
+            if (ui::MenuItem("Drawing guide"))
+                show_drawing_guide_ = true;
             if (ui::MenuItem("Start here..."))
                 guard([this] { show_start(); });
             ui::TextUnformatted("tilezeitjobb 2.0 - NES pixel and tile studio");
@@ -555,13 +677,11 @@ void Editor::menus() {
                           {ImGuiKey_T, Tool::TileBrush},
                           {ImGuiKey_H, Tool::Pan}})
         if (ImGui::IsKeyPressed(key)) {
-            if (t == Tool::TileBrush)
-                workspace_ = Workspace::Tiles;
-            else if (t == Tool::Sprite || t == Tool::Move)
-                workspace_ = Workspace::Sprites;
-            else if (t != Tool::Pan && workspace_ != Workspace::Sprites &&
-                     workspace_ != Workspace::Animate)
-                workspace_ = Workspace::Draw;
+            if (t == Tool::TileBrush) {
+                show_tiles_ = true;
+                layer_ = -1;
+                palette_group_ = 0;
+            }
             cancel_drawing();
             tool_ = t;
         }
@@ -576,7 +696,7 @@ void Editor::menus() {
 void Editor::tools(bool embedded) {
     if (!embedded)
         ImGui::Begin("Tools");
-    ui::SeparatorText(guidance_ ? "2. Choose a tool" : "Tools");
+    ui::SeparatorText("Tools");
     int column = 0;
     for (auto [name, t] : {std::pair{"Pencil  P", Tool::Pencil},
                            {"Eraser  E", Tool::Eraser},
@@ -595,17 +715,14 @@ void Editor::tools(bool embedded) {
                            {"Paint tile  T", Tool::TileBrush},
                            {"Pan  H", Tool::Pan}}) {
         bool relevant = t == Tool::Pan || t == Tool::Picker;
-        if (workspace_ != Workspace::Tiles)
-            relevant |= t == Tool::Line || t == Tool::Rectangle || t == Tool::Ellipse ||
-                        t == Tool::Polyline || t == Tool::Polygon;
-        if (workspace_ == Workspace::Tiles)
-            relevant |= t == Tool::TileBrush || t == Tool::Palette;
-        else if (workspace_ == Workspace::Sprites)
-            relevant |= t == Tool::Sprite || t == Tool::Move || t == Tool::Pencil ||
-                        t == Tool::Eraser || t == Tool::Fill;
+        relevant |= t == Tool::Line || t == Tool::Rectangle || t == Tool::Ellipse ||
+                    t == Tool::Polyline || t == Tool::Polygon || t == Tool::Pencil ||
+                    t == Tool::Eraser || t == Tool::Fill;
+        if (layer_ >= 0)
+            relevant |= t == Tool::Sprite || t == Tool::Move;
         else
-            relevant |= t == Tool::Pencil || t == Tool::Eraser || t == Tool::Fill ||
-                        t == Tool::Select || t == Tool::Stamp;
+            relevant |=
+                t == Tool::Select || t == Tool::Stamp || t == Tool::TileBrush || t == Tool::Palette;
         if (embedded && !relevant)
             continue;
         if (column++ % 2)
@@ -629,6 +746,8 @@ void Editor::tools(bool embedded) {
         if (selected) {
             cancel_drawing();
             tool_ = t;
+            if (t == Tool::TileBrush)
+                show_tiles_ = true;
             if (t == Tool::TileBrush || t == Tool::Stamp || t == Tool::Palette) {
                 layer_ = -1;
                 palette_group_ = 0;
@@ -650,12 +769,10 @@ void Editor::tools(bool embedded) {
     if (shape_tool()) {
         if (tool_ != Tool::Line)
             ui::Checkbox("Filled shape", &shape_filled_);
-        ImGui::TextWrapped("Drag to preview; release to draw. Shift constrains; Esc cancels.");
     }
     if (path_tool()) {
         if (tool_ == Tool::Polygon)
             ui::Checkbox("Filled polygon", &shape_filled_);
-        ImGui::TextWrapped("Click points. Enter or right-click finishes; Esc cancels.");
         if (!path_.empty()) {
             ui::Text("%zu points | Backspace removes last", path_.size());
             if (ui::Button("Finish"))
@@ -665,12 +782,11 @@ void Editor::tools(bool embedded) {
                 cancel_drawing();
         }
     }
-    if (workspace_ != Workspace::Tiles) {
+    if (tool_ != Tool::TileBrush) {
         ui::SeparatorText("Symmetry");
         ui::Checkbox("Mirror left / right", &mirror_x_);
         ui::Checkbox("Mirror top / bottom", &mirror_y_);
         ui::TextDisabled(layer_ >= 0 ? "Around sprite center" : "Around canvas center");
-        ui::TextDisabled("Pencil / eraser / shapes");
     }
     if (ui::CollapsingHeader("Canvas options", embedded ? 0 : ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ui::Checkbox("Show sprites", &show_sprites_))
@@ -692,10 +808,9 @@ void Editor::tools(bool embedded) {
 void Editor::palettes(bool embedded) {
     if (!embedded)
         ImGui::Begin("Palettes");
-    ui::SeparatorText(guidance_ ? "1. Choose a paint color" : "Paint color");
-    ImGui::TextWrapped("Click a color to paint. Right-click a color to edit it.");
+    ui::SeparatorText("Paint color");
     for (int group = 0; group < 2; ++group) {
-        if (!advanced_panels_ && group != (workspace_ == Workspace::Sprites ? 1 : 0))
+        if (!advanced_panels_ && group != (layer_ >= 0 ? 1 : 0))
             continue;
         ImGui::PushID(group);
         ui::TextUnformatted(group ? "Sprites" : "Background");
@@ -780,12 +895,16 @@ void Editor::palettes(bool embedded) {
     }
     ImGui::Separator();
     ui::Text("Color set %d / paint color %d", palette_ + 1, slot_ + 1);
-    ImGui::TextWrapped("Each 16x16 background block shares one color set.");
     ImGui::Separator();
     if (ui::Button("Edit color sets...", {-1, 28})) {
         palette_edit_group_ = palette_group_;
         palette_edit_index_ = palette_;
         palette_editor_open_ = true;
+    }
+    if (!project.frames[frame_].layers.empty()) {
+        if (!embedded)
+            ImGui::End();
+        return;
     }
     if (project.reference.empty()) {
         if (!embedded && ui::Button("Import a picture..."))
@@ -832,6 +951,8 @@ void Editor::palettes(bool embedded) {
         ImGui::End();
 }
 void Editor::copy_selection(bool cut) {
+    if (cut && !target_editable())
+        return;
     if (selection_.width <= 0 || selection_.height <= 0)
         return;
     clip_width_ = selection_.width;
@@ -848,11 +969,8 @@ void Editor::copy_selection(bool cut) {
     for (int y = 0; y < clip_height_; ++y)
         for (int x = 0; x < clip_width_; ++x) {
             auto index = (selection_.y + y) * project.width + selection_.x + x;
-            clipboard_[y * clip_width_ + x] = f.pixels[index];
-            if (cut) {
-                f.pixels[index] = 0;
-                f.paint_mask[index] = 0;
-            }
+            if (cut)
+                project.write_background_pixel(frame_, index, 255);
         }
     if (cut)
         changed();
@@ -862,6 +980,8 @@ void Editor::apply_tool(int x, int y, bool first, bool right) {
     auto &f = project.frames[frame_];
     Byte paint = Byte(right ? 0 : slot_);
     if (tool_ == Tool::TileBrush) {
+        if (!right && !ImGui::GetIO().KeyAlt && !target_editable())
+            return;
         if (right || ImGui::GetIO().KeyAlt) {
             selected_tile_ = read_tile(project, frame_, x / 8, y / 8);
             tile_selected_ = true;
@@ -903,7 +1023,7 @@ void Editor::apply_tool(int x, int y, bool first, bool right) {
                     break;
                 }
             }
-        } else if (layer_ >= 0) {
+        } else if (layer_ >= 0 && target_editable()) {
             auto &s = f.sprites.at(layer_);
             s.x += x - last_x_;
             s.y += y - last_y_;
@@ -927,11 +1047,15 @@ void Editor::apply_tool(int x, int y, bool first, bool right) {
         return;
     }
     if (tool_ == Tool::Palette) {
+        if (!target_editable())
+            return;
         f.attributes[(y / 16) * project.block_width() + x / 16] = Byte(palette_);
         changed();
         return;
     }
     if (tool_ == Tool::Stamp) {
+        if (!target_editable())
+            return;
         if (!clipboard_.empty() && (first || x != last_x_ || y != last_y_)) {
             int sx = brush_snap_ ? (x / 8) * 8 : x, sy = brush_snap_ ? (y / 8) * 8 : y;
             stamp_brush(project, frame_, sx, sy, {clip_width_, clip_height_, clipboard_},
@@ -941,12 +1065,14 @@ void Editor::apply_tool(int x, int y, bool first, bool right) {
         return;
     }
     if (tool_ == Tool::Fill) {
+        if (!target_editable())
+            return;
         if (first) {
             if (layer_ >= 0) {
                 const auto &s = f.sprites.at(layer_);
                 flood_fill_sprite(project, frame_, layer_, x - s.x, y - s.y, Byte(paint));
             } else
-                flood_fill(project, frame_, x, y, paint, right ? -1 : palette_);
+                flood_fill(project, frame_, x, y, paint, right ? -1 : palette_, right);
             changed();
         }
         return;
@@ -1019,10 +1145,11 @@ void Editor::finish_path() {
     }
 }
 void Editor::paint_stroke(const std::vector<PixelPoint> &points, bool right) {
-    if (points.empty())
+    if (points.empty() || !target_editable())
         return;
     bool erase = right || tool_ == Tool::Eraser;
-    paint_pixels(project, frame_, points, Byte(erase ? 0 : slot_), erase ? -1 : palette_, layer_);
+    paint_pixels(project, frame_, points, Byte(erase ? 0 : slot_), erase ? -1 : palette_, layer_,
+                 erase);
     changed();
 }
 void Editor::canvas() {
@@ -1033,7 +1160,11 @@ void Editor::canvas() {
                      ? 0
                      : ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking);
-    ui::Text("%s | %s", tool_label(), layer_ >= 0 ? "Selected sprite" : "Background");
+    ui::Text(
+        "%s | %s", tool_label(),
+        layer_ >= 0
+            ? project.frames[frame_].sprites.at(layer_).name.c_str()
+            : project.frames[frame_].layers.at(project.frames[frame_].active_layer).name.c_str());
     ImGui::SameLine();
     auto &colors = palette_group_ ? project.sprite_palettes : project.background;
     ui::ColorButton("Current paint", color(colors[palette_][slot_]), ImGuiColorEditFlags_NoTooltip,
@@ -1136,6 +1267,12 @@ void Editor::canvas() {
             ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
         } else if (!playing_ && !path_tool()) {
             bool first = ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1);
+            bool paint_target = tool_ != Tool::Pan && tool_ != Tool::Picker &&
+                                tool_ != Tool::Select && tool_ != Tool::Move &&
+                                tool_ != Tool::Sprite &&
+                                !(tool_ == Tool::TileBrush && (io.KeyAlt || ImGui::IsMouseDown(1)));
+            if (first && paint_target && !target_editable())
+                first = false;
             if (first) {
                 stroke_ = true;
                 start_x_ = last_x_ = x;
@@ -1295,35 +1432,8 @@ void Editor::layers(bool embedded) {
     if (!embedded)
         ImGui::Begin("Layers & sprites");
     auto &f = project.frames[frame_];
-    if (ui::Button("+ New sprite", {-1, 28}))
-        add_blank_sprite();
-    if (ui::Selectable("Background picture", layer_ < 0))
-        layer_ = -1;
-    ImGui::Separator();
-    ImGui::BeginChild("layer-list", {0, 115}, true);
-    for (std::size_t i = 0; i < f.sprites.size(); ++i) {
-        ImGui::PushID(static_cast<int>(i));
-        bool visible = f.sprites[i].visible;
-        if (ui::Checkbox("##visible", &visible)) {
-            checkpoint();
-            f.sprites[i].visible = visible;
-            changed();
-        }
-        ImGui::SameLine();
-        if (ui::Selectable(f.sprites[i].name.c_str(), layer_ == static_cast<int>(i))) {
-            layer_ = static_cast<int>(i);
-            palette_ = f.sprites[i].palette;
-            palette_group_ = 1;
-        }
-        ImGui::PopID();
-    }
-    ImGui::EndChild();
-    if (ui::Button("Generate from sheet") && !project.sprite_sheet.empty()) {
-        checkpoint();
-        project.generate_sprites(frame_, palette_);
-        layer_ = -1;
-        changed();
-    }
+    if (!embedded)
+        layer_stack();
     if (layer_ >= 0 && static_cast<std::size_t>(layer_) < f.sprites.size()) {
         auto &s = f.sprites[layer_];
         ImGui::Separator();
@@ -1343,7 +1453,8 @@ void Editor::layers(bool embedded) {
                               {origin.x + (x + 1) * 16.f, origin.y + (y + 1) * 16.f},
                               IM_COL32(60, 70, 80, 255));
             }
-        if (ImGui::IsItemHovered() && (ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1))) {
+        if (ImGui::IsItemHovered() && (ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1)) &&
+            target_editable()) {
             if (ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1))
                 checkpoint();
             int x = int((ImGui::GetIO().MousePos.x - origin.x) / 16),
@@ -1358,6 +1469,7 @@ void Editor::layers(bool embedded) {
             s.name = name;
             changed();
         }
+        ImGui::BeginDisabled(s.locked || f.sprites_locked);
         int position[]{s.x, s.y};
         if (ui::InputInt2("Position", position)) {
             checkpoint();
@@ -1382,27 +1494,7 @@ void Editor::layers(bool embedded) {
                 changed();
             }
         }
-        if (ui::Button("Delete sprite")) {
-            checkpoint();
-            f.sprites.erase(f.sprites.begin() + layer_);
-            layer_ = -1;
-            changed();
-        } else {
-            ImGui::SameLine();
-            if (ui::Button("Up") && layer_ > 0) {
-                checkpoint();
-                std::swap(f.sprites[layer_], f.sprites[layer_ - 1]);
-                --layer_;
-                changed();
-            }
-            ImGui::SameLine();
-            if (ui::Button("Down") && static_cast<std::size_t>(layer_ + 1) < f.sprites.size()) {
-                checkpoint();
-                std::swap(f.sprites[layer_], f.sprites[layer_ + 1]);
-                ++layer_;
-                changed();
-            }
-        }
+        ImGui::EndDisabled();
     } else {
         ImGui::TextWrapped("Select a sprite to edit its pixels, palette, position, priority and "
                            "flipping. Earlier objects have higher OAM priority.");
@@ -1410,8 +1502,11 @@ void Editor::layers(bool embedded) {
     if (!embedded)
         ImGui::End();
 }
-void Editor::preview() {
-    ImGui::Begin("Preview");
+void Editor::preview(bool *open) {
+    if (!ImGui::Begin("Preview", open)) {
+        ImGui::End();
+        return;
+    }
     ImVec2 available = ImGui::GetContentRegionAvail();
     float scale =
         std::max(.1f, std::min(available.x / project.width, (available.y - 25) / project.height));
@@ -1419,10 +1514,10 @@ void Editor::preview() {
     ui::TextUnformatted("Nearest-neighbor / current frame");
     ImGui::End();
 }
-void Editor::timeline() {
+void Editor::timeline(bool *open) {
     if (!advanced_panels_)
         place_panel(timeline_rect_);
-    ImGui::Begin("Timeline", nullptr,
+    ImGui::Begin("Timeline", open,
                  advanced_panels_
                      ? 0
                      : ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
@@ -1484,13 +1579,15 @@ void Editor::timeline() {
     ImGui::EndChild();
     ImGui::End();
 }
-void Editor::hardware(bool embedded) {
+void Editor::hardware(bool embedded, bool *open) {
     if (!embedded && focus_hardware_) {
         ImGui::SetNextWindowFocus();
         focus_hardware_ = false;
     }
-    if (!embedded)
-        ImGui::Begin("Hardware");
+    if (!embedded && !ImGui::Begin("Hardware", open)) {
+        ImGui::End();
+        return;
+    }
     ui::TextUnformatted("NES / NROM-128");
     ImGui::Separator();
     if (compiled_) {
@@ -1506,7 +1603,7 @@ void Editor::hardware(bool embedded) {
     ImGui::Separator();
     std::array<float, 240> lines{};
     for (const auto &s : project.frames[frame_].sprites)
-        if (s.visible)
+        if (s.visible && project.frames[frame_].sprites_visible)
             for (int y = std::max(0, s.y); y < std::min(240, s.y + 8); ++y)
                 ++lines[y];
     ui::TextUnformatted("Sprites per scanline (limit 8)");
@@ -1820,10 +1917,58 @@ void Editor::watch_sources() {
             status_ = std::string("Source reload pending: ") + e.what();
         }
     };
-    poll(project.image_path, false);
+    bool image_layers = false;
+    std::map<std::string, Image> reloads;
+    for (const auto &f : project.frames)
+        for (const auto &layer : f.layers) {
+            if (layer.kind != LayerKind::Image)
+                continue;
+            image_layers = true;
+            if (layer.source_path.empty())
+                continue;
+            auto path = path_from_utf8(layer.source_path);
+            if (path.is_relative())
+                path = (project_path_.empty() ? std::filesystem::current_path()
+                                              : project_path_.parent_path()) /
+                       path;
+            std::error_code ec;
+            auto time = std::filesystem::last_write_time(path, ec);
+            if (ec)
+                continue;
+            auto [it, first] = layer_source_times_.try_emplace(layer.source_path, time);
+            if (first || it->second == time || reloads.contains(layer.source_path))
+                continue;
+            try {
+                reloads.emplace(layer.source_path, load_image(path));
+                it->second = time;
+            } catch (const std::exception &e) {
+                status_ = std::string("Source reload pending: ") + e.what();
+            }
+        }
+    if (!reloads.empty()) {
+        checkpoint();
+        for (auto &f : project.frames)
+            for (auto &layer : f.layers) {
+                auto it = reloads.find(layer.source_path);
+                if (layer.kind == LayerKind::Image && it != reloads.end()) {
+                    layer.source = it->second;
+                    layer.conversion_stamp = 0;
+                }
+            }
+        if (auto it = reloads.find(project.image_path); it != reloads.end())
+            project.reference = it->second;
+        for (std::size_t i = 0; i < project.frames.size(); ++i)
+            project.compose_layers(i);
+        changed();
+        status_ = "Reloaded image layers; paint layers and baked copies were preserved.";
+    }
+    if (!image_layers)
+        poll(project.image_path, false);
     poll(project.sprite_path, true);
 }
 bool Editor::tick() {
+    ImGuiErrorRecoveryState ui_state;
+    ImGui::ErrorRecoveryStoreState(&ui_state);
     try {
         if (!ImGui::IsMouseDown(0) && !ImGui::IsMouseDown(1))
             tile_edit_stroke_ = false;
@@ -1837,6 +1982,10 @@ bool Editor::tick() {
             next_frame_ = ImGui::GetTime() + project.frames[frame_].duration_ms / 1000.;
             refresh_ = true;
         }
+        project.ensure_layers(frame_);
+#ifndef __EMSCRIPTEN__
+        poll_mcp();
+#endif
         if (layer_ >= static_cast<int>(project.frames[frame_].sprites.size()))
             layer_ = -1;
         menus();
@@ -1858,10 +2007,19 @@ bool Editor::tick() {
         } else
             guided_workspace();
         focus_workflows_ = false;
+        info_windows();
+#ifndef __EMSCRIPTEN__
+        mcp_window();
+#endif
         popups();
         start_screen();
         palette_editor();
     } catch (const std::exception &e) {
+        auto &io = ImGui::GetIO();
+        const bool assert_errors = io.ConfigErrorRecoveryEnableAssert;
+        io.ConfigErrorRecoveryEnableAssert = false;
+        ImGui::ErrorRecoveryTryToRecoverState(&ui_state);
+        io.ConfigErrorRecoveryEnableAssert = assert_errors;
         error_ = e.what();
         std::cerr << "Editor: " << e.what() << "\n";
     }

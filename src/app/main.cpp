@@ -38,13 +38,32 @@ static void glfw_error(int code, const char *message) {
     std::cerr << "GLFW " << code << ": " << message << "\n";
 }
 int main(int argc, char **argv) {
-    bool smoke = false, demo = false, start_fullscreen = false;
+    if (argc > 1 && std::string_view(argv[1]) == "--mcp-connect") {
+        try {
+            if (argc != 4)
+                throw std::runtime_error("Usage: tilezeitjobb --mcp-connect PORT TOKEN");
+            std::size_t consumed{};
+            auto port = std::stoul(argv[2], &consumed);
+            if (consumed != std::string(argv[2]).size() || port < 1 || port > 65535)
+                throw std::runtime_error("Invalid MCP port");
+            return tzj::mcp::connect_stdio(static_cast<unsigned short>(port), argv[3]);
+        } catch (const std::exception &e) {
+            std::cerr << e.what() << '\n';
+            return 1;
+        }
+    }
+    bool smoke = false, demo = false, start_fullscreen = false, start_mcp = false,
+         nes_preview = false;
     std::filesystem::path input, screenshot;
     std::string workspace = "draw";
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--smoke-test")
             smoke = true;
+        else if (arg == "--mcp")
+            start_mcp = true;
+        else if (arg == "--nes-preview")
+            nes_preview = true;
         else if (arg == "--fullscreen")
             start_fullscreen = true;
         else if (arg == "--workspace" && i + 1 < argc)
@@ -56,7 +75,8 @@ int main(int argc, char **argv) {
         else if (arg == "--help") {
             std::cout << "tilezeitjobb [PROJECT.tzj] [--demo] [--fullscreen] [--workspace "
                          "draw|tiles|sprites|animate|export] [--smoke-test] "
-                         "[--screenshot FILE.png]\n";
+                         "[--screenshot FILE.png] [--mcp] [--nes-preview]\n"
+                         "tilezeitjobb --mcp-connect PORT TOKEN\n";
             return 0;
         } else
             input = argv[i];
@@ -108,6 +128,8 @@ int main(int argc, char **argv) {
     int result = 0;
     try {
         tzj::Editor editor(executable_directory(argv[0]) / "data");
+        editor.configure_mcp(executable_directory(argv[0]) /
+                             std::filesystem::path(argv[0]).filename());
         editor.set_fullscreen(start_fullscreen);
         bool fullscreen = false, was_maximized = false;
         int window_x = 0, window_y = 0, window_width = 1440, window_height = 960;
@@ -122,6 +144,10 @@ int main(int argc, char **argv) {
         if (!input.empty())
             editor.open(input);
         editor.start_workspace(workspace);
+        if (start_mcp)
+            editor.start_mcp();
+        if (nes_preview)
+            editor.start_nes_preview();
         int frames = 0;
         bool running = true;
         while (running) {

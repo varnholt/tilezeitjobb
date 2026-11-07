@@ -29,8 +29,8 @@ void Editor::transform_captured_brush(BrushTransform transform) {
     tool_ = Tool::Stamp;
     status_ = "Brush transformed; paint on the canvas to stamp it";
 }
-void Editor::brush_controls(bool embedded) {
-    if (!embedded && !ImGui::Begin("Brush")) {
+void Editor::brush_controls(bool embedded, bool *open) {
+    if (!embedded && !ImGui::Begin("Brush", open)) {
         if (!embedded)
             ImGui::End();
         return;
@@ -71,7 +71,7 @@ void Editor::brush_controls(bool embedded) {
         for (int y = 0; y < clip_height_; y += step)
             for (int x = 0; x < clip_width_; x += step) {
                 Byte value = clipboard_[y * clip_width_ + x];
-                if (value == 0 && brush_transparent_)
+                if (value == 255 || (value == 0 && brush_transparent_))
                     continue;
                 draw->AddRectFilled({origin.x + x * scale, origin.y + y * scale},
                                     {origin.x + std::min(x + step, clip_width_) * scale,
@@ -110,8 +110,10 @@ void Editor::edit_selected_tile(const Tile &replacement) {
     } else
         status_ = "Edited the tile brush; paint it into the map with T";
 }
-void Editor::tiles(bool embedded) {
-    if (!embedded && !ImGui::Begin("Tiles")) {
+void Editor::tiles(bool embedded, bool *open) {
+    if (!embedded)
+        ImGui::SetNextWindowSize({420, 520}, ImGuiCond_FirstUseEver);
+    if (!embedded && !ImGui::Begin("Tiles", open)) {
         if (!embedded)
             ImGui::End();
         return;

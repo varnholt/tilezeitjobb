@@ -72,6 +72,21 @@ void save_png(const std::filesystem::path &path, const Image &image) {
         !out)
         throw std::runtime_error("PNG write failed");
 }
+std::vector<Byte> encode_png(const Image &image) {
+    if (image.width < 1 || image.height < 1 || image.width > 4096 || image.height > 4096 ||
+        image.rgba.size() != std::size_t(image.width) * image.height * 4)
+        throw std::runtime_error("Invalid image dimensions or pixel buffer");
+    std::vector<Byte> bytes;
+    const auto callback = [](void *context, void *data, int size) {
+        auto &out = *static_cast<std::vector<Byte> *>(context);
+        const auto *start = static_cast<const Byte *>(data);
+        out.insert(out.end(), start, start + size);
+    };
+    if (!stbi_write_png_to_func(callback, &bytes, image.width, image.height, 4,
+                               image.rgba.data(), image.width * 4))
+        throw std::runtime_error("PNG encoding failed");
+    return bytes;
+}
 static int distance(Color a, Color b) {
     int r = int(a.r) - b.r, g = int(a.g) - b.g, bl = int(a.b) - b.b;
     return r * r * 3 + g * g * 6 + bl * bl * 2;

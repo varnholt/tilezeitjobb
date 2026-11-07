@@ -6,8 +6,73 @@
 namespace tzj::ui {
 namespace {
 constexpr std::pair<std::string_view, const char *> descriptions[]{
-    {">", "Scene workflow: start with the background, add sprites on top, animate if needed, then "
-          "export a ROM."},
+    {"NES preview", "Run the exported mapper-0 ROM in the built-in C++ emulator. Includes pause, "
+                    "reset, frame stepping and optional rebuild after edits."},
+    {"Run current artwork", "Compile the selected frame to a ROM and boot it in the NES preview. "
+                            "Invalid artwork leaves the last working ROM visible."},
+    {"Rebuild after edits", "Recompile and restart the cartridge after an edit finishes. Failed "
+                            "validation keeps the last working ROM."},
+    {"Step frame", "Pause the NES preview and execute one complete emulated video frame."},
+    {"Reset ROM", "Restart the currently loaded cartridge and run its startup routine again."},
+    {"Layers", "The scene stack. Sprites are above the background; eye controls determine "
+               "visibility and locks protect content. Drag within a group to reorder."},
+    {"Around canvas center",
+     "Mirrored strokes reflect across the center of the background canvas."},
+    {"Around sprite center", "Mirrored strokes reflect within the selected 8x8 sprite."},
+    {"+ Paint", "Create a transparent indexed paint layer above the selected background layer."},
+    {"+ Image", "Import an original image as a live layer, keeping its source pixels and "
+                "conversion modifiers."},
+    {"+ Sprite", "Add a blank 8x8 sprite on top of the background and select it for painting."},
+    {"Duplicate layer", "Create an independent copy of this layer. Image copies keep their "
+                        "original source and editable conversion settings."},
+    {"Make paintable copy", "Capture this image layer after its modifiers as an indexed paint "
+                            "layer above it. The original stays intact underneath."},
+    {"Merge down", "Combine this layer with the background layer below. Live image modifiers are "
+                   "baked into the resulting paint layer. Undo restores both originals."},
+    {"Delete layer", "Remove the selected layer. At least one background layer must remain; locked "
+                     "layers must be unlocked first."},
+    {"Move up",
+     "Move this layer toward the top of its group, giving it priority over layers below."},
+    {"Move down", "Move this layer toward the bottom of its group."},
+    {"Layer name",
+     "Rename the selected layer. Its pixels, visibility and modifier settings do not change."},
+    {"Enable modifiers", "Bypass or enable the image modifiers together. The source is always "
+                         "converted to the scene's NES color sets."},
+    {"Dithering", "Approximate intermediate colors with pixel patterns. Turn it off for "
+                  "nearest-color conversion."},
+    {"Method", "Choose no dithering, an ordered Bayer pattern, Floyd-Steinberg error diffusion, or "
+               "Atkinson diffusion."},
+    {"Dither strength", "Control how strongly conversion uses dithering. Zero keeps nearest-color "
+                        "pixels; 100 uses the full pattern or propagated error."},
+    {"Color adjustments", "Adjust the source colors without altering the original image. Changes "
+                          "are applied before NES conversion."},
+    {"Color adjustment", "Enable or bypass brightness and contrast for this image layer."},
+    {"Brightness", "Lighten or darken the source before converting it to NES colors. The original "
+                   "image is preserved."},
+    {"Contrast",
+     "Increase or decrease separation between dark and light source colors before conversion."},
+    {"Crop / resize / position", "Crop the original image, resize it with nearest-neighbor "
+                                 "sampling, and position the result on the background."},
+    {"Crop and resize", "Enable the source crop and output-size modifiers. Disable to use the "
+                        "original source dimensions."},
+    {"Crop origin", "The top-left crop position in original image pixels: X, then Y."},
+    {"Crop size",
+     "The source crop width and height. Zero uses the remaining original image extent."},
+    {"Output size",
+     "The converted image width and height after cropping. Zero keeps the crop size."},
+    {"Layer position", "Position the converted layer in scene pixels: X, then Y."},
+    {"Fit NES colors to this layer",
+     "Choose shared NES background color sets and color-area assignments to fit this source. This "
+     "also changes colors used by other background layers."},
+    {"Clear layer",
+     "Make every pixel on the selected paint layer transparent, revealing layers underneath."},
+    {"Drawing help",
+     "Instructions for the active drawing tool, selection and NES scene constraints."},
+    {"Layers - top is in front",
+     "The scene stack: sprites above background layers, with visibility and locking per row. Drag "
+     "within a group to change order."},
+    {"Selected layer", "Properties and operations for the highlighted row in the layer stack."},
+
     {"Background tiles  %d / 256", "How many distinct 8x8 background patterns this frame needs. "
                                    "The current ROM format allows 256 patterns."},
     {"Sprite tiles      %d / 256",
@@ -77,17 +142,14 @@ constexpr std::pair<std::string_view, const char *> descriptions[]{
     {"Undo",
      "Undo one operation. A drawn shape or completed polygon is one operation. Shortcut: Ctrl+Z."},
     {"Redo", "Restore the last undone operation. Shortcut: Ctrl+Y."},
-    {"1. Background",
-     "First draw or import scenery. Background tiles form the fixed picture behind the sprites."},
-    {"2. Sprites", "Next add characters, objects and highlight overlays on top of the background. "
-                   "Each sprite is an 8x8 object."},
-    {"3. Animate", "Create additional frames, set their timing, and preview animation. You can "
-                   "return to the background or sprites at any time."},
-    {"4. Export",
-     "Check NES hardware limits and compile the current frame into a playable .nes file."},
-    {"Edit background tiles", "Edit repeated 8x8 background patterns. Changes can update every "
-                              "matching tile in this frame."},
-    {"Return to drawing", "Return to freehand and shape tools for the background."},
+    {"Import image",
+     "Import a picture as a new background image layer, with an editable paint layer above it."},
+    {"Tile editor", "Show the catalog of repeated 8x8 background patterns. Selecting a pattern "
+                    "lets you paint with it or edit its linked copies."},
+    {"Animation timeline", "Show frame duplication, timing and playback below the canvas. You can "
+                           "edit any layer while it is open."},
+    {"NES limits", "Show hardware validation and tile/sprite counts for the current frame, without "
+                   "changing the selected layer."},
     {"Fullscreen (F11)",
      "Use the whole display. In the desktop app, F11 restores the previous window state."},
     {"Windowed (F11)", "Leave fullscreen and restore the desktop window."},
