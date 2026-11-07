@@ -25,7 +25,8 @@ void Editor::upload_emulator() {
 }
 void Editor::boot_emulator() {
     try {
-        auto rom = build_rom(compile_scene(project, frame_));
+        auto rom = emulator_animation_ ? build_animation_rom(compile_animation(project))
+                                       : build_rom(compile_scene(project, frame_));
         auto candidate = std::make_unique<emu::Nes>();
         candidate->load(rom);
         // Let the cartridge's own startup routine wait for vblank and upload its scene.
@@ -64,14 +65,20 @@ void Editor::emulator_window() {
         bool reset = ui::Button("Reset ROM");
         ImGui::EndDisabled();
         ui::Checkbox("Rebuild after edits", &emulator_auto_);
+        if (ui::Checkbox("Animate timeline", &emulator_animation_))
+            boot_emulator();
+        ui::help("Animate timeline",
+                 "Run every frame as a looping ROM with NTSC frame timing. "
+                 "Uses a fixed background, shared palettes and up to 47 frames.");
         bool drawing = stroke_ || shape_drag_ || tile_edit_stroke_ || !path_.empty() ||
                        ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1);
-        if (emulator_ && emulator_revision_ != render_revision_ && compiled_ &&
-            build_rom(*compiled_) == emulator_rom_)
+        if (!emulator_animation_ && emulator_ && emulator_revision_ != render_revision_ &&
+            compiled_ && build_rom(*compiled_) == emulator_rom_)
             emulator_revision_ = render_revision_;
         if (emulator_auto_ && emulator_revision_ != render_revision_ && !drawing &&
             ImGui::GetTime() - emulator_changed_at_ > .25) {
-            if (compiled_ && !emulator_rom_.empty() && build_rom(*compiled_) == emulator_rom_)
+            if (!emulator_animation_ && compiled_ && !emulator_rom_.empty() &&
+                build_rom(*compiled_) == emulator_rom_)
                 emulator_revision_ = render_revision_;
             else {
                 const bool was_running = emulator_running_, had_rom = bool(emulator_);

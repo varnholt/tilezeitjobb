@@ -19,33 +19,9 @@ std::array<Byte, 16> encode_tile(const Tile &tile) {
     return out;
 }
 std::vector<std::string> hardware_errors(const Project &p, std::size_t frame) {
-    p.validate();
-    const auto &f = p.frames.at(frame);
     std::vector<std::string> errors;
-    for (const auto &group : {p.background, p.sprite_palettes})
-        for (const auto &pal : group)
-            if (std::find(pal.begin(), pal.end(), 0x0d) != pal.end()) {
-                errors.push_back("Color $0D is unsafe on some real consoles; use $0F for black.");
-                goto palettes_done;
-            }
-palettes_done:
-    int count = 0;
-    std::array<int, 240> lines{};
-    bool position_error = false;
-    for (const auto &s : f.sprites)
-        if (f.sprites_visible && s.visible) {
-            ++count;
-            if (s.x < 0 || s.x > 255 || s.y < 1 || s.y > 239)
-                position_error = true;
-            for (int y = std::max(0, s.y); y < std::min(240, s.y + 8); ++y)
-                ++lines[y];
-        }
-    if (count > 64)
-        errors.push_back("NES OAM supports at most 64 visible sprites.");
-    if (position_error)
-        errors.push_back("ROM sprites must be inside the initial viewport: X 0..255, Y 1..239.");
-    if (*std::max_element(lines.begin(), lines.end()) > 8)
-        errors.push_back("More than 8 sprites overlap a scanline; hardware would drop sprites.");
+    for (const auto &issue : hardware_issues(p, frame))
+        errors.push_back(issue.message);
     return errors;
 }
 NesScene compile_scene(const Project &input, std::size_t frame) {
@@ -112,7 +88,7 @@ NesScene compile_scene(const Project &input, std::size_t frame) {
     }
     int index = 0;
     for (const auto &s : f.sprites)
-        if (f.sprites_visible && s.visible) {
+        if (p.sprite_visible(frame, s)) {
             const int tile = add(s.pixels, true);
             scene.oam[index * 4] = static_cast<Byte>(s.y - 1);
             scene.oam[index * 4 + 1] = static_cast<Byte>(tile);
@@ -172,7 +148,7 @@ class Assembler {
     }
     int address(const std::string &name) const { return labels.at(name); }
 };
-std::vector<Byte> build_rom(const NesScene &s) {
+static std::vector<Byte> build_rom_impl(const NesScene &s, const NesAnimation *animation) {
     if (s.nametables.size() != 1024 && s.nametables.size() != 2048)
         throw std::runtime_error("Invalid ROM nametables");
     constexpr int nt_address = 0x8400, pal_address = 0x8c00, oam_address = 0x8c20;
@@ -219,6 +195,14 @@ std::vector<Byte> build_rom(const NesScene &s) {
     a.label("oam");
     a.emit({0xbd, oam_address & 255, oam_address >> 8, 0x9d, 0, 2, 0xe8});
     a.branch(0xd0, "oam");
+    const int count = animation ? static_cast<int>(animation->oam.size()) : 0;
+    constexpr int table_address = 0x8d20, frames_address = 0x9000;
+    if (animation) {
+        // Zero-page state: active page, request, ready, staged page, frame,
+        // countdown lo/hi, staged countdown lo/hi, source pointer, destination pointer.
+        a.emit({0xa9, 2, 0x85, 0, 0xa9, 1, 0x85, 1, 0xa9, animation->ticks[0] & 255, 0x85, 5, 0xa9,
+                animation->ticks[0] >> 8, 0x85, 6});
+    }
     // Wait until the next vblank before enabling rendering and DMA.
     a.label("wait3");
     a.emit({0x2c, 2, 0x20});
@@ -226,11 +210,49 @@ std::vector<Byte> build_rom(const NesScene &s) {
     a.emit({0xa9, 0,    0x8d, 3,    0x20, 0xa9, 2,    0x8d, 0x14, 0x40, 0xa9, 0,    0x8d, 5,
             0x20, 0x8d, 5,    0x20, 0xa9, 0x88, 0x8d, 0,    0x20, 0xa9, 0x1e, 0x8d, 1,    0x20});
     a.label("forever");
+    if (animation) {
+        a.emit({0xa5, 1}); // Wait for the NMI to request the next frame.
+        a.branch(0xf0, "forever");
+        a.emit({0xa9, 0, 0x85, 1, 0xe6, 4, 0xa5, 4, 0xc9, count});
+        a.branch(0x90, "frame_index");
+        a.emit({0xa9, 0, 0x85, 4});
+        a.label("frame_index");
+        a.emit({0xaa, 0xa5, 0, 0x49, 1, 0x85, 3, 0x85, 12});
+        for (int table = 0; table < 4; ++table) {
+            int address = table_address + table * count;
+            int destination = table < 2 ? 9 + table : 5 + table;
+            a.emit({0xbd, address & 255, address >> 8, 0x85, destination});
+        }
+        a.emit({0xa0, 0});
+        a.label("stage_oam");
+        a.emit({0xb1, 9, 0x91, 11, 0xc8}); // Copy outside vblank into the inactive OAM page.
+        a.branch(0xd0, "stage_oam");
+        a.emit({0xa9, 1, 0x85, 2}); // Publish only after all bytes and duration are ready.
+    }
     a.jump(0x4c, "forever");
     // NMI refreshes OAM each frame (important for real console OAM decay).
     a.label("nmi");
-    a.emit({0x48, 0xa9, 0,    0x8d, 3,    0x20, 0xa9, 2,    0x8d, 0x14, 0x40, 0xad,
-            2,    0x20, 0xa9, 0,    0x8d, 5,    0x20, 0x8d, 5,    0x20, 0x68, 0x40});
+    if (animation) {
+        a.emit({0x48, 0x8a, 0x48, 0x98, 0x48, 0xa5, 5, 0x05, 6});
+        a.branch(0xf0, "try_swap");
+        a.emit({0xa5, 5});
+        a.branch(0xd0, "dec_low");
+        a.emit({0xc6, 6});
+        a.label("dec_low");
+        a.emit({0xc6, 5, 0xa5, 5, 0x05, 6});
+        a.branch(0xd0, "dma");
+        a.label("try_swap");
+        a.emit({0xa5, 2});
+        a.branch(0xf0, "dma");
+        a.emit({0xa5, 3, 0x85, 0, 0xa5, 7, 0x85, 5, 0xa5, 8,
+                0x85, 6, 0xa9, 0, 0x85, 2, 0xa9, 1, 0x85, 1});
+        a.label("dma");
+        a.emit({0xa9, 0,    0x8d, 3,    0x20, 0xa5, 0,    0x8d, 0x14, 0x40, 0xad, 2,    0x20, 0xa9,
+                0,    0x8d, 5,    0x20, 0x8d, 5,    0x20, 0x68, 0xa8, 0x68, 0xaa, 0x68, 0x40});
+    } else {
+        a.emit({0x48, 0xa9, 0,    0x8d, 3,    0x20, 0xa9, 2,    0x8d, 0x14, 0x40, 0xad,
+                2,    0x20, 0xa9, 0,    0x8d, 5,    0x20, 0x8d, 5,    0x20, 0x68, 0x40});
+    }
     a.label("irq");
     a.emit({0x40});
     a.resolve();
@@ -249,6 +271,18 @@ std::vector<Byte> build_rom(const NesScene &s) {
     std::copy(s.nametables.begin(), s.nametables.end(), rom.begin() + 16 + nt_address - 0x8000);
     std::copy(s.palette.begin(), s.palette.end(), rom.begin() + 16 + pal_address - 0x8000);
     std::copy(s.oam.begin(), s.oam.end(), rom.begin() + 16 + oam_address - 0x8000);
+    if (animation) {
+        for (int i = 0; i < count; ++i) {
+            const int address = frames_address + i * 256;
+            auto table = rom.begin() + 16 + table_address - 0x8000 + i;
+            table[0] = Byte(address);
+            table[count] = Byte(address >> 8);
+            table[count * 2] = Byte(animation->ticks[i]);
+            table[count * 3] = Byte(animation->ticks[i] >> 8);
+            std::copy(animation->oam[i].begin(), animation->oam[i].end(),
+                      rom.begin() + 16 + address - 0x8000);
+        }
+    }
     int v = 16 + 16384 - 6;
     for (const auto &name : {"nmi", "reset", "irq"}) {
         int address = a.address(name);
@@ -257,6 +291,20 @@ std::vector<Byte> build_rom(const NesScene &s) {
     }
     std::copy(s.chr.begin(), s.chr.end(), rom.begin() + 16 + 16384);
     return rom;
+}
+std::vector<Byte> build_rom(const NesScene &scene) {
+    return build_rom_impl(scene, nullptr);
+}
+std::vector<Byte> build_animation_rom(const NesAnimation &animation) {
+    if (animation.oam.empty() || animation.oam.size() != animation.ticks.size())
+        throw std::runtime_error("Animation requires matching OAM frames and durations");
+    if (animation.oam.size() > (0xbffa - 0x9000) / 256)
+        throw std::runtime_error("Animated NROM fits at most 47 frames; shorten the animation");
+    if (std::ranges::any_of(animation.ticks, [](auto ticks) { return ticks == 0; }))
+        throw std::runtime_error("Animation frame durations must be positive");
+    auto scene = animation.scene;
+    scene.oam = animation.oam.front();
+    return build_rom_impl(scene, &animation);
 }
 void write_binary(const std::filesystem::path &path, const std::vector<Byte> &data) {
     std::ofstream out(path, std::ios::binary);

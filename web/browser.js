@@ -57,7 +57,10 @@ Module['createArchive'] = function (files) {
 Module['downloadFile'] = function (path, bundle) {
   let blob, name=path.split('/').pop();
   if (bundle) {
-    const files=['.nes','.chr','.nam','.pal','.oam','.h'].map(extension => ({
+      const extensions = bundle === 2 ? ['.nes','.chr','.nam','.pal','.oam','.json']
+                       : bundle === 3 ? ['.png','.json']
+                       : ['.nes','.chr','.nam','.pal','.oam','.h'];
+      const files=extensions.map(extension => ({
       name:name+extension, data:FS.readFile(path+extension)
     }));
     blob=Module.createArchive(files); name+='.zip';

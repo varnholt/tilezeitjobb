@@ -57,4 +57,26 @@ Tile wrapped_tile_line(const Tile &, int x0, int y0, int x1, int y1, Byte color)
 Image onion_overlay(const Project &, std::size_t frame, int previous, int following, int opacity,
                     bool sprites_only);
 Color guide_pixel(const BackgroundLayer &, int x, int y);
+struct PixelRect {
+    int x{}, y{}, width{}, height{};
+    bool operator==(const PixelRect &) const = default;
+};
+PixelRect metasprite_bounds(const Project &, std::size_t frame, int group);
+int group_sprites(Project &, std::size_t frame, const std::vector<int> &, std::string name);
+int create_metasprite(Project &, std::size_t frame, int width, int height, int palette, int x,
+                      int y, std::string name);
+void ungroup_sprites(Project &, std::size_t frame, int group);
+void move_metasprite(Project &, std::size_t frame, int group, int dx, int dy);
+void transform_metasprite(Project &, std::size_t frame, int group, BrushTransform);
+int duplicate_metasprite(Project &, std::size_t frame, int group);
+void delete_metasprite(Project &, std::size_t frame, int group);
+IndexedBrush resize_brush(const IndexedBrush &, int width, int height);
+void apply_selection(Project &, std::size_t frame, PixelRect source, int x, int y,
+                     const IndexedBrush &result, bool copy = false);
+std::vector<PixelPoint> pixel_perfect_path(const std::vector<PixelPoint> &);
+std::size_t add_tile_asset(Project &, std::string name, const Tile &);
+void place_tile_asset(Project &, std::size_t frame, std::size_t layer, int tx, int ty, int asset);
+void place_metatile(Project &, std::size_t frame, std::size_t layer, int bx, int by,
+                    std::size_t asset);
+std::size_t convert_to_tilemap(Project &, std::size_t frame, std::size_t layer);
 } // namespace tzj

@@ -6,9 +6,9 @@
 
 namespace tzj {
 namespace {
-constexpr ImGuiWindowFlags fixed_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                         ImGuiWindowFlags_NoSavedSettings |
-                                         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus;
+constexpr ImGuiWindowFlags fixed_flags =
+    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus;
 ImVec4 paint_color(Byte index) {
     auto c = nes_colors[index];
     return {c.r / 255.f, c.g / 255.f, c.b / 255.f, 1};
@@ -194,12 +194,34 @@ void Editor::start_workspace(std::string_view name) {
         show_bitmap_text_ = true;
     else if (name == "gradients")
         show_gradients_ = true;
+    else if (name == "character") {
+        const auto &f = project.frames[frame_];
+        if (!f.groups.empty()) {
+            group_ = f.groups.front().id;
+            auto it = std::ranges::find(f.sprites, group_, &Sprite::group);
+            if (it != f.sprites.end()) {
+                layer_ = int(it - f.sprites.begin());
+                palette_group_ = 1;
+                palette_ = it->palette;
+            }
+            tool_ = Tool::Pencil;
+        }
+    } else if (name == "tilemap") {
+        convert_to_tilemap(project, frame_, std::size_t(project.frames[frame_].active_layer));
+        show_tilemap_ = true;
+        map_tile_ = 0;
+    } else if (name == "selection") {
+        selection_ = {56, 48, 144, 48};
+        begin_selection_transform();
+    } else if (name == "shortcuts")
+        show_shortcuts_ = true;
     else if (name == "onion") {
         show_onion_settings_ = true;
         show_timeline_ = true;
     } else
-        throw std::runtime_error("Unknown workspace; use draw, tiles, sprites, animate, export, "
-                                 "brushes, text, gradients or onion");
+        throw std::runtime_error(
+            "Unknown workspace; use draw, tiles, sprites, animate, export, "
+            "brushes, text, gradients, character, tilemap, selection, shortcuts or onion");
 }
 void Editor::new_project() {
     welcome_ = false;
@@ -292,6 +314,55 @@ void Editor::start_screen() {
     }
 }
 void Editor::info_windows() {
+    if (show_shortcuts_) {
+        ImGui::SetNextWindowSize({640, 530}, ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Keyboard shortcuts", &show_shortcuts_)) {
+            if (ImGui::BeginTable("shortcuts", 2,
+                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+                ImGui::TableSetupColumn("Keys", ImGuiTableColumnFlags_WidthFixed, 180);
+                ImGui::TableSetupColumn("Action");
+                for (const auto &[keys, action] :
+                     {std::pair{"Ctrl+N / Ctrl+O", "New / open project"},
+                      {"Ctrl+S / Ctrl+Shift+S", "Save / save as"},
+                      {"Ctrl+E / Ctrl+Shift+E", "Export current frame / animated ROM"},
+                      {"Ctrl+Z", "Undo"},
+                      {"Ctrl+Shift+Z / Ctrl+Y", "Redo"},
+                      {"Ctrl+A / Ctrl+D", "Select all / deselect"},
+                      {"Ctrl+T / Ctrl+Shift+J", "Transform selection / transform a copy"},
+                      {"Ctrl+G / Ctrl+Shift+G", "Group selected sprites / ungroup character"},
+                      {"Shift+H / Shift+V", "Flip character, selection or brush"},
+                      {"Arrows / Shift+arrows", "Nudge character or selection by 1 / 8 pixels"},
+                      {"Delete", "Clear selected pixels or delete selected sprite / character"},
+                      {", / .", "Previous / next animation frame"},
+                      {"Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste as captured brush"},
+                      {"Ctrl+J", "Duplicate selected layer or sprite"},
+                      {"P / E / F / I", "Pencil / eraser / fill / color picker"},
+                      {"L / B / O", "Line / rectangle / ellipse"},
+                      {"K / G", "Polyline / polygon"},
+                      {"A / S / M", "Assign palette / place sprite / move sprite"},
+                      {"R / V / T / H", "Select area / stamp / tile brush / pan"},
+                      {"1 / 2 / 3 / 4", "Choose paint color slot"},
+                      {"[ / ]", "Smaller / larger brush"},
+                      {"Space + drag / middle drag", "Pan canvas"},
+                      {"Alt + click", "Temporarily pick a paint color (T picks a tile)"},
+                      {"Mouse wheel / Home", "Zoom / fit canvas"},
+                      {"Shift while drawing", "Constrain lines and shapes"},
+                      {"Enter / Backspace", "Finish path / remove last path point"},
+                      {"Esc", "Cancel drawing preview and deselect"},
+                      {"F1 / F11", "Keyboard shortcuts / fullscreen"}}) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(keys);
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(action);
+                }
+                ImGui::EndTable();
+            }
+            ImGui::TextWrapped("Drawing shortcuts pause while typing or using a dialog. "
+                               "Hover tools and menu items for more information.");
+        }
+        ImGui::End();
+    }
     if (show_project_info_) {
         ImGui::SetNextWindowSize({420, 0}, ImGuiCond_Appearing);
         if (ImGui::Begin("Project information", &show_project_info_,
@@ -335,6 +406,8 @@ void Editor::info_windows() {
         hardware(false, &show_hardware_);
     emulator_window();
     artist_windows();
+    tilemap_window();
+    selection_window();
 }
 void Editor::guided_workspace() {
     auto *viewport = ImGui::GetMainViewport();
@@ -367,7 +440,9 @@ void Editor::guided_workspace() {
     layer_stack();
     ImGui::Separator();
     ImGui::BeginChild("selected-layer-properties", {0, 0});
-    if (layer_ >= 0) {
+    if (selected_group())
+        group_properties();
+    else if (layer_ >= 0) {
         ui::SeparatorText("Sprite properties");
         layers(true);
         if (ui::CollapsingHeader("Sprite sheet (optional)"))

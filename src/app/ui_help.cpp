@@ -6,6 +6,42 @@
 namespace tzj::ui {
 namespace {
 constexpr std::pair<std::string_view, const char *> descriptions[]{
+    {"Keyboard shortcuts",
+     "Open the keyboard reference. F1 toggles this window; drawing shortcuts pause while typing."},
+    {"New 16x16 character", "Create four linked 8x8 sprite tiles. Draw, move, flip and rotate the "
+                            "character as one object."},
+    {"Group selected sprites",
+     "Shift-click sprite rows, then press Ctrl+G to treat them as one character."},
+    {"Ungroup character",
+     "Separate the selected character into its individual sprite tiles. Ctrl+Shift+G."},
+    {"Transform selection...", "Move, flip, rotate or resize selected pixels with a live preview. "
+                               "Enter commits one undo step; Esc cancels. Ctrl+T."},
+    {"Duplicate selection...", "Transform a copy while keeping the original pixels. Ctrl+Shift+J."},
+    {"Select all", "Select the whole background canvas. Ctrl+A."},
+    {"Deselect", "Remove the selection outline and cancel its pending transform. Ctrl+D."},
+    {"Tile map library", "Create reusable 8x8 tiles and 16x16 metatiles, place references, and "
+                         "edit all instances together."},
+    {"New tile map", "Add a transparent background layer whose cells refer to reusable 8x8 tiles."},
+    {"Capture canvas tile",
+     "Add the most recently picked canvas tile to the reusable tile library."},
+    {"New empty tile", "Create a transparent 8x8 tile, then paint it in the library pixel grid."},
+    {"Stamp 16x16 metatiles",
+     "Place four tile references and a shared NES color set together, aligned to 16x16 regions."},
+    {"New metatile", "Create a 16x16 block using the selected tile in all four cells. Edit its "
+                     "four tile IDs below."},
+    {"Metatile name", "A descriptive name for this reusable 16x16 block."},
+    {"Tile name", "A descriptive name for this shared 8x8 tile."},
+    {"Metatile color set",
+     "Assign one of the four background color sets to the entire 16x16 block when placed."},
+    {"Character name",
+     "Name this sprite group in the layer stack and exported animation metadata."},
+    {"Flip H", "Mirror the character or floating selection horizontally. Shift+H."},
+    {"Flip V", "Mirror the character or floating selection vertically. Shift+V."},
+    {"Ungroup", "Separate this character into individual sprite objects. Ctrl+Shift+G."},
+    {"Keep original (copy)",
+     "Leave the source pixels in place when committing the transformed selection."},
+    {"Apply (Enter)", "Commit the selection preview as one undoable edit. Enter."},
+    {"Cancel (Esc)", "Discard the selection preview and keep the original artwork. Esc."},
     {"Edit bitmap font", "Edit individual 8x8 glyphs, import a font sheet, or restore the built-in "
                          "font. Font changes are saved with the project."},
     {"Direction", "Choose whether the gradient runs from left to right or from top to bottom."},
@@ -238,7 +274,7 @@ constexpr std::pair<std::string_view, const char *> descriptions[]{
     {"Quit", "Close the editor after offering to save unsaved artwork."},
     {"Undo",
      "Undo one operation. A drawn shape or completed polygon is one operation. Shortcut: Ctrl+Z."},
-    {"Redo", "Restore the last undone operation. Shortcut: Ctrl+Y."},
+    {"Redo", "Restore the last undone operation. Ctrl+Shift+Z or Ctrl+Y."},
     {"Import image",
      "Import a picture as a new background image layer, with an editable paint layer above it."},
     {"Tile editor", "Show the catalog of repeated 8x8 background patterns. Selecting a pattern "

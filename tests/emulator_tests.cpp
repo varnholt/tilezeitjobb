@@ -242,6 +242,98 @@ int main() {
         sprites.frames[0].layers[upper].pixels[10 * 256 + 10] = 3;
         sprites.compose_layers(0);
         boot_compare(sprites, "sprite priority and layers");
+        // Execute an animated cartridge, checking full framebuffers and exact hold times.
+        Project animated;
+        Sprite actor;
+        actor.x = 32;
+        actor.y = 40;
+        actor.pixels.fill(1);
+        animated.frames[0].sprites.push_back(actor);
+        animated.frames[0].duration_ms = 100;
+        animated.frames.push_back(animated.frames[0]);
+        animated.frames[1].duration_ms = 150;
+        animated.frames[1].sprites[0].x = 80;
+        animated.frames[1].sprites[0].pixels.fill(2);
+        auto animation = compile_animation(animated);
+        auto cartridge = build_animation_rom(animation);
+        check(animation.ticks == std::vector<std::uint16_t>{6, 9},
+              "NTSC duration conversion failed");
+        std::array<Image, 2> expected{animated.render(0), animated.render(1)};
+        auto classify = [&] {
+            for (int f = 0; f < 2; ++f) {
+                bool match = true;
+                for (int y = 0; y < 240 && match; ++y)
+                    for (int x = 0; x < 256; ++x)
+                        if (expected[f].at(x, y) != nes_colors[console->pixels()[y * 256 + x]]) {
+                            match = false;
+                            break;
+                        }
+                if (match)
+                    return f;
+            }
+            return -1;
+        };
+        console->load(cartridge);
+        std::vector<int> sequence;
+        for (int i = 0; i < 70; ++i) {
+            console->run_frame();
+            sequence.push_back(classify());
+        }
+        int previous = -1, held = 0, transitions = 0;
+        for (std::size_t i = 12; i < sequence.size(); ++i) {
+            int current = sequence[i];
+            check(current >= 0, "Animated ROM displayed a partial or incorrect OAM frame");
+            if (current != previous) {
+                if (transitions > 0)
+                    check(held == animation.ticks[previous], "Animated ROM frame duration drifted");
+                if (previous >= 0)
+                    ++transitions;
+                previous = current;
+                held = 1;
+            } else
+                ++held;
+        }
+        check(transitions >= 5, "Animated ROM did not loop");
+        console->reset();
+        for (int i = 0; i < 30; ++i) {
+            console->run_frame();
+            check(classify() == sequence[i], "Animation reset did not reproduce its timing");
+        }
+        auto bad_animation = animation;
+        auto slow = animation;
+        slow.ticks = {260, 3};
+        console->load(build_animation_rom(slow));
+        previous = -1;
+        held = 0;
+        transitions = 0;
+        for (int i = 0; i < 550; ++i) {
+            console->run_frame();
+            if (i < 12)
+                continue;
+            int current = classify();
+            check(current >= 0, "Long-duration animation produced a partial frame");
+            if (current != previous) {
+                if (transitions > 0)
+                    check(held == slow.ticks[previous],
+                          "16-bit frame timer did not borrow correctly");
+                if (previous >= 0)
+                    ++transitions;
+                previous = current;
+                held = 1;
+            } else
+                ++held;
+        }
+        check(transitions >= 3, "Long-duration animation did not advance");
+        bad_animation.ticks[0] = 0;
+        rejects([&] { build_animation_rom(bad_animation); }, "Zero animation duration accepted");
+        bad_animation.oam.resize(48);
+        bad_animation.ticks.resize(48, 1);
+        rejects([&] { build_animation_rom(bad_animation); },
+                "Oversized animation overwrote vectors");
+        animated.frames[1].pixels[0] = 1;
+        rejects([&] { compile_animation(animated); },
+                "Animated NROM accepted a changing background");
+        std::cout << "PASS animated ROM: complete frames, NTSC timing, looping and reset\n";
         std::cout << "CPU, PPU registers, NROM boot and rendering tests passed\n";
         return 0;
     } catch (const std::exception &e) {

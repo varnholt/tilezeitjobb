@@ -72,8 +72,45 @@ hardware reports, the original palette-test animation and separate preview panel
 | S / M | place / move a sprite |
 | 1..4 / [ / ] | paint color / decrease or increase brush size |
 | Ctrl+Z / Ctrl+Y | undo / redo |
+| Ctrl+Shift+Z | redo |
+| Ctrl+A / Ctrl+D | select all / deselect |
+| Ctrl+T / Ctrl+Shift+J | transform selection / transform a copy |
+| Ctrl+J | duplicate selected layer or character |
+| Ctrl+G / Ctrl+Shift+G | group selected sprites / ungroup character |
+| Shift+H / Shift+V | flip character, floating selection or captured brush |
+| arrow keys / Shift+arrow | nudge character or floating selection by 1 / 8 pixels |
+| Delete / , / . | clear selected pixels or sprite / previous frame / next frame |
+| Space+drag / Alt+click / Home | pan / temporarily pick color / fit canvas |
 | Ctrl+S / Ctrl+O / Ctrl+E | save / open / export NES |
+| Ctrl+Shift+E | export animated NES ROM |
+| F1 | keyboard shortcut reference |
 | F11 | toggle fullscreen |
+
+### Characters, selections and tile maps
+
+**Layers → New 16x16 character** creates a metasprite made of four NES sprite tiles. Select its group
+in the layer stack to draw across tile boundaries, fill, move, flip or rotate it as one object.
+Expand the group to edit individual tiles. Shift-click sprite rows and use **Ctrl+G** to group existing
+objects; **Ctrl+Shift+G** separates them. Group visibility, locking and origin coordinates are saved
+with the project. Physical NES sprite and scanline limits still apply to every member tile.
+
+Select background pixels with **R**, then press **Ctrl+T** to move, flip, rotate or resize them with a
+live preview. Drag inside the selection to move it or drag its lower-right corner to resize. **Enter**
+commits one undo step; **Esc** keeps the original pixels. **Ctrl+Shift+J** transforms a copy.
+Resizing uses nearest-neighbor sampling. **Pixel-perfect pencil** removes redundant corners from
+one-pixel freehand strokes while preserving the artwork underneath.
+
+**Tools → Tile map library** creates layers of reusable 8x8 tile references. Convert an existing layer
+to deduplicated references, or build an empty map. Edit a library tile to update its instances across
+frames. **T** places references; Alt-click picks a reference and right-click erases a map cell.
+Create 16x16 metatiles from four tile IDs and a shared color set. Selection transforms detach touched
+cells so other instances retain their pixels. Library edits intentionally affect all references.
+
+![Character groups in the layer stack](docs/images/character.png)
+
+![Reusable tile references and library editing](docs/images/tilemap.png)
+
+![Selection transform preview](docs/images/selection.png)
 
 ### Tiles, colors and brushes
 
@@ -182,8 +219,18 @@ The output directory must already exist. The exporter writes:
 | `.h` | the same assets as static C arrays |
 
 The ROM displays the first 256x240 viewport of the selected frame. A second nametable is uploaded with the correct
-mirroring for a 512x240 or 256x480 picture. Timeline playback and interactive scrolling are editor features, not
-part of the exported ROM runtime; animated ROM playback is not implemented yet.
+mirroring for a 512x240 or 256x480 picture. The ROM does not perform interactive scrolling.
+
+**File → Export animated NES ROM** compiles the timeline into a looping NTSC cartridge with a fixed
+background and shared palettes. It supports up to 47 frames and 256 unique sprite patterns across
+the animation. Durations are rounded to NTSC refresh ticks. Sprite frames are prepared outside vblank
+and swapped using double-buffered OAM. The bundle includes ROM, raw assets and JSON timing metadata.
+**File → Export sprite sheet + metadata** writes transparent PNG frames with durations and character origins.
+
+```sh
+tilezeitjobb-cli animate character.tzj output/character
+tilezeitjobb-cli spritesheet character.tzj output/character --columns 8
+```
 
 Open `.nes` files in an emulator or on a flash cartridge supporting mapper 0. Programming a physical cartridge also
 requires a matching board and programmer. Emulator boot and rendering are tested; physical hardware has not been tested.
@@ -199,7 +246,8 @@ requires a matching board and programmer. Emulator boot and rendering are tested
 | Sprite positions in the ROM | X 0..255, Y 1..239, relative to the initial viewport |
 
 The exporter rejects scenes outside these limits and unsafe color `$0D`. RGB appearance varies between console
-revisions, video signals and emulator palette settings. The editor can preview sprite limits and highlight color regions.
+revisions, video signals and emulator palette settings. Click a warning in **View → NES limits** to
+highlight its affected sprite, scanlines or tile. Unsafe-color warnings also open the relevant palette.
 
 ## Built-in NES preview
 
@@ -212,7 +260,8 @@ The same core runs on desktop and WebAssembly, with no external emulator depende
 documented 6502 instructions, NROM mapping, PPU registers and video, vblank/NMI, OAM DMA, sprite priority,
 flipping and the eight-sprites-per-scanline limit. It is focused on the exported artwork ROMs: audio,
 controller input, unofficial opcodes, banked mappers and cycle-exact PPU fetch behavior are not implemented.
-The ordinary editing canvas remains a direct artwork view. Timeline animation is not yet compiled into the ROM.
+The ordinary editing canvas remains a direct artwork view. Enable **Animate timeline** in NES preview
+to run the compiled animation cartridge, including its exported frame timing.
 
 ![Built-in NES preview running the exported demo ROM](docs/images/nes-preview.png)
 
@@ -292,13 +341,13 @@ cmake --install build --config Release --prefix package
 
 ## Project files
 
-Version 2 `.tzj` files are self-contained JSON: indexed frames, color regions, palettes, sprite objects and source
+Modern `.tzj` files are self-contained JSON: indexed frames, color regions, palettes, sprite objects and source
 images are stored together. Saves use a temporary file followed by replacement of the destination. Undo/redo keeps
 up to 32 snapshots with a 64 MiB history target.
 
 The original QSettings INI `.tzj` format is also accepted. Its referenced images must still exist; relative paths
 resolve beside the project. Legacy RGB colors are mapped to NES color codes, and image dimensions infer a two-screen
-layout. Check that layout after import, since the old project format did not store it. Saving writes version 4,
+layout. Check that layout after import, since the old project format did not store it. Saving writes version 5,
 which the original Qt application cannot read. Loading alone does not modify the original file.
 
 ## Tests
@@ -308,6 +357,7 @@ which the original Qt application cannot read. Loading alone does not modify the
 | Core | CHR bitplanes, deduplication, attribute packing and screen boundaries, OAM, ROM headers/vectors, file roundtrips, legacy import and hardware-limit rejection |
 | Drawing tools | shape rasterization, clipping, filled/outlined ellipses, symmetry, sprite flips, paint masks and undo |
 | Artist tools | saved assets and version migration, editable fonts and alpha import, indexed gradients, custom/radial symmetry, seamless strokes, reference-guide export exclusion and two-sided onion skins |
+| Studio workflows | character groups, transforms, tile references, metatiles, selection moves and scaling, shared-palette remapping, sprite-sheet transparency and metadata, actionable diagnostics and format migration |
 | Editing workflows | linked tile updates, tile painting, brush rotation and wrapping, palette remapping, selected-color drawing/fill and undo |
 | Layer workflows | compositing, transparency, visibility, locking, modifiers, independent paint copies, layer migration and project roundtrips |
 | MCP | protocol handshake, tool contracts, atomic edits, undo, locks, PNG previews, server lifecycle and authenticated stdio relay |
@@ -348,9 +398,8 @@ The desktop smoke test also renders real editor screenshots, for example on Wind
 
 ## Not yet
 
-- pixel-perfect stroke cleanup and curves
-- animated ROM playback and sprite-sheet animation export
-- metasprites, 8x16 sprites and dedicated CHR-bank organization
+- curves and 8x16 hardware sprites
+- dedicated CHR-bank organization and animated backgrounds
 - banked mappers and physical hardware verification
 
 ## Background

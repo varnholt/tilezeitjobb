@@ -68,6 +68,13 @@ void Project::resize(int w, int h) {
             f.paint_mask = std::move(mask);
         }
         for (auto &layer : f.layers) {
+            if (layer.kind == LayerKind::Tilemap) {
+                std::vector<int> refs(std::size_t(w / 8) * (h / 8), -1);
+                for (int y = 0; y < std::min(h, height) / 8; ++y)
+                    std::copy_n(layer.tile_refs.begin() + y * (width / 8), std::min(w, width) / 8,
+                                refs.begin() + y * (w / 8));
+                layer.tile_refs = std::move(refs);
+            }
             if (layer.kind == LayerKind::Paint) {
                 std::vector<Byte> resized(static_cast<std::size_t>(w) * h, 255);
                 for (int y = 0; y < std::min(h, height); ++y)
@@ -103,6 +110,18 @@ void Project::validate() const {
            (width == 256 && height == 480)),
          "Invalid project dimensions");
     fail(frames.empty() || frames.size() > 256, "Project requires 1 to 256 frames");
+    fail(tiles.size() > 4096 || metatiles.size() > 4096, "Too many tile assets or metatiles");
+    for (const auto &tile : tiles) {
+        fail(tile.name.empty() || tile.name.size() > 128, "Invalid tile asset name");
+        for (auto pixel : tile.pixels)
+            fail(pixel > 3 && pixel != 255, "Invalid tile asset pixel");
+    }
+    for (const auto &meta : metatiles) {
+        fail(meta.name.empty() || meta.name.size() > 128 || meta.palette < 0 || meta.palette > 3,
+             "Invalid metatile");
+        for (int id : meta.tiles)
+            fail(id < -1 || id >= int(tiles.size()), "Invalid metatile tile reference");
+    }
     fail(brushes.size() > 128 || ramps.size() > 64, "Too many saved brushes or color ramps");
     std::size_t brush_bytes = 0;
     for (const auto &brush : brushes) {
@@ -155,14 +174,22 @@ void Project::validate() const {
         for (const auto &l : f.layers) {
             fail(l.name.size() > 4096 || l.source_path.size() > 32768,
                  "Layer text exceeds project limits");
-            fail(l.kind != LayerKind::Paint && l.kind != LayerKind::Image, "Invalid layer type");
+            fail(l.kind != LayerKind::Paint && l.kind != LayerKind::Image &&
+                     l.kind != LayerKind::Tilemap,
+                 "Invalid layer type");
             fail(l.guide_opacity < 0 || l.guide_opacity > 100 ||
                      (l.reference_only && l.kind != LayerKind::Image),
                  "Invalid reference guide settings");
-            if (l.kind == LayerKind::Paint) {
+            if (l.kind == LayerKind::Paint || l.kind == LayerKind::Tilemap) {
                 fail(l.pixels.size() != f.pixels.size(), "Invalid paint layer dimensions");
                 for (auto c : l.pixels)
                     fail(c > 3 && c != 255, "Invalid indexed layer pixel");
+                if (l.kind == LayerKind::Tilemap) {
+                    fail(l.tile_refs.size() != std::size_t(width / 8) * (height / 8),
+                         "Invalid tile reference map");
+                    for (int id : l.tile_refs)
+                        fail(id < -1 || id >= int(tiles.size()), "Invalid map tile reference");
+                }
             } else {
                 fail(l.source.width < 1 || l.source.height < 1 || l.source.width > 4096 ||
                          l.source.height > 4096 ||
@@ -182,11 +209,25 @@ void Project::validate() const {
                  "Invalid dithering method");
         }
         fail(f.sprites.size() > 4096, "Too many sprite objects");
+        fail(f.groups.size() > 128, "Too many metasprite groups");
+        std::vector<int> group_ids;
+        for (const auto &g : f.groups) {
+            fail(g.id < 0 || g.id > 1000000 || g.name.empty() || g.name.size() > 128 ||
+                     std::abs(static_cast<long long>(g.origin_x)) > 4096 ||
+                     std::abs(static_cast<long long>(g.origin_y)) > 4096,
+                 "Invalid metasprite group");
+            fail(std::find(group_ids.begin(), group_ids.end(), g.id) != group_ids.end(),
+                 "Duplicate metasprite ID");
+            group_ids.push_back(g.id);
+        }
         for (auto p : f.pixels)
             fail(p > 3, "Pixel index outside 0..3");
         for (auto p : f.attributes)
             fail(p > 3, "Attribute index outside 0..3");
         for (const auto &s : f.sprites) {
+            fail(s.group < -1 || (s.group >= 0 && std::find(group_ids.begin(), group_ids.end(),
+                                                            s.group) == group_ids.end()),
+                 "Sprite references a missing metasprite");
             fail(s.palette < 0 || s.palette > 3, "Sprite palette outside 0..3");
             fail(std::abs(static_cast<long long>(s.x)) > 4096 ||
                      std::abs(static_cast<long long>(s.y)) > 4096,
@@ -323,6 +364,7 @@ void Project::generate_sprites(std::size_t frame, int pal) {
                 generated.push_back(std::move(s));
         }
     f.sprites = std::move(generated);
+    f.groups.clear();
 }
 Image Project::render(std::size_t index, bool sprites, bool hardware_limits, bool guides) const {
     Frame flattened;
@@ -358,7 +400,7 @@ Image Project::render(std::size_t index, bool sprites, bool hardware_limits, boo
                                 Byte((int(over.b) * over.a + int(color.b) * (255 - over.a)) / 255);
                         } else {
                             auto pixel =
-                                (layer.kind == LayerKind::Paint ? layer.pixels : layer.converted)
+                                (layer.kind == LayerKind::Image ? layer.converted : layer.pixels)
                                     .at(y * width + x);
                             if (pixel != 255)
                                 color = nes_colors[palette[pixel]];
@@ -373,7 +415,7 @@ Image Project::render(std::size_t index, bool sprites, bool hardware_limits, boo
         std::array<int, 480> scanlines{};
         int count = 0;
         for (const auto &s : f.sprites) {
-            if (!s.visible)
+            if (!sprite_visible(index, s))
                 continue;
             if (hardware_limits && count++ >= 64)
                 break;
@@ -435,6 +477,7 @@ void paint_line(Project &p, std::size_t frame, int x0, int y0, int x1, int y1, B
     p.compose_layers(frame);
 }
 void flood_fill(Project &p, std::size_t frame, int x, int y, Byte c, int palette, bool erase) {
+    p.compose_layers(frame);
     if (x < 0 || y < 0 || x >= p.width || y >= p.height || c > 3 || palette < -1 || palette > 3)
         return;
     auto &f = p.frames.at(frame);
@@ -518,7 +561,7 @@ void save_project(const std::filesystem::path &path, const Project &input) {
     const auto &p = snapshot;
     p.validate();
     Json j{{"format", "tilezeitjobb"},
-           {"version", 4},
+           {"version", 5},
            {"width", p.width},
            {"height", p.height},
            {"offset_x", p.offset_x},
@@ -543,6 +586,15 @@ void save_project(const std::filesystem::path &path, const Project &input) {
     j["font"] = {{"name", p.font.name}, {"glyphs", Json::array()}};
     for (const auto &g : p.font.glyphs)
         j["font"]["glyphs"].push_back(hex(std::vector<Byte>(g.begin(), g.end())));
+    j["tiles"] = Json::array();
+    for (const auto &tile : p.tiles)
+        j["tiles"].push_back(
+            {{"name", tile.name},
+             {"pixels", hex(std::vector<Byte>(tile.pixels.begin(), tile.pixels.end()))}});
+    j["metatiles"] = Json::array();
+    for (const auto &meta : p.metatiles)
+        j["metatiles"].push_back(
+            {{"name", meta.name}, {"tiles", meta.tiles}, {"palette", meta.palette}});
     for (const auto &f : p.frames) {
         Json sprites = Json::array();
         for (const auto &s : f.sprites)
@@ -557,6 +609,7 @@ void save_project(const std::filesystem::path &path, const Project &input) {
                                {"flip_y", s.flip_y},
                                {"behind", s.behind},
                                {"locked", s.locked},
+                               {"group", s.group},
                                {"pixels", s.pixels}});
         Json layers = Json::array();
         for (const auto &l : f.layers) {
@@ -569,6 +622,7 @@ void save_project(const std::filesystem::path &path, const Project &input) {
                               {"reference_only", l.reference_only},
                               {"guide_opacity", l.guide_opacity},
                               {"pixels", hex(l.pixels)},
+                              {"tile_refs", l.tile_refs},
                               {"source", image_json(l.source)},
                               {"source_path", l.source_path},
                               {"modifiers",
@@ -599,6 +653,15 @@ void save_project(const std::filesystem::path &path, const Project &input) {
                                {"sprites_locked", f.sprites_locked},
                                {"layers", layers},
                                {"sprites", sprites}});
+        auto &groups = j["frames"].back()["groups"];
+        groups = Json::array();
+        for (const auto &g : f.groups)
+            groups.push_back({{"id", g.id},
+                              {"name", g.name},
+                              {"origin_x", g.origin_x},
+                              {"origin_y", g.origin_y},
+                              {"visible", g.visible},
+                              {"locked", g.locked}});
     }
     auto serialized = j.dump(2);
     if (serialized.size() > 192 * 1024 * 1024)
@@ -724,8 +787,8 @@ Project load_project(const std::filesystem::path &path) {
     if (text[start] != '{')
         return read_legacy(text, path);
     const auto j = Json::parse(text);
-    if (j.at("format") != "tilezeitjobb" ||
-        (j.at("version") != 2 && j.at("version") != 3 && j.at("version") != 4))
+    if (j.at("format") != "tilezeitjobb" || (j.at("version") != 2 && j.at("version") != 3 &&
+                                             j.at("version") != 4 && j.at("version") != 5))
         throw std::runtime_error("Unsupported project format/version");
     Project p;
     p.resize(checked_int(j.at("width"), 256, 512), checked_int(j.at("height"), 240, 480));
@@ -780,6 +843,31 @@ Project load_project(const std::filesystem::path &path) {
         }
     }
     p.frames.clear();
+    if (j.contains("tiles")) {
+        if (!j["tiles"].is_array() || j["tiles"].size() > 4096)
+            throw std::runtime_error("Invalid tile library");
+        for (const auto &tile : j["tiles"]) {
+            TileAsset asset;
+            asset.name = tile.at("name");
+            auto pixels = unhex(tile.at("pixels"), 64);
+            std::copy(pixels.begin(), pixels.end(), asset.pixels.begin());
+            p.tiles.push_back(std::move(asset));
+        }
+    }
+    if (j.contains("metatiles")) {
+        if (!j["metatiles"].is_array() || j["metatiles"].size() > 4096)
+            throw std::runtime_error("Invalid metatile library");
+        for (const auto &meta : j["metatiles"]) {
+            Metatile asset;
+            asset.name = meta.at("name");
+            asset.palette = checked_int(meta.at("palette"), 0, 3);
+            if (!meta.at("tiles").is_array() || meta["tiles"].size() != 4)
+                throw std::runtime_error("A metatile requires four tile references");
+            for (int i = 0; i < 4; ++i)
+                asset.tiles[i] = checked_int(meta["tiles"][i], -1, int(p.tiles.size()) - 1);
+            p.metatiles.push_back(std::move(asset));
+        }
+    }
     if (!j.at("frames").is_array() || j.at("frames").empty() || j.at("frames").size() > 256)
         throw std::runtime_error("Invalid frame count");
     for (const auto &jf : j.at("frames")) {
@@ -792,6 +880,20 @@ Project load_project(const std::filesystem::path &path) {
                    static_cast<std::size_t>(p.block_width()) * p.block_height(), 3);
         f.attributes = jf.at("attributes").get<std::vector<Byte>>();
         f.duration_ms = checked_int(jf.at("duration_ms"), 10, 60000);
+        if (jf.contains("groups")) {
+            if (!jf["groups"].is_array() || jf["groups"].size() > 128)
+                throw std::runtime_error("Too many metasprites");
+            for (const auto &group : jf["groups"]) {
+                Metasprite g;
+                g.id = checked_int(group.at("id"), 0, 1000000);
+                g.name = group.at("name");
+                g.origin_x = checked_int(group.at("origin_x"), -4096, 4096);
+                g.origin_y = checked_int(group.at("origin_y"), -4096, 4096);
+                g.visible = group.value("visible", true);
+                g.locked = group.value("locked", false);
+                f.groups.push_back(std::move(g));
+            }
+        }
         if (!jf.at("sprites").is_array() || jf.at("sprites").size() > 4096)
             throw std::runtime_error("Too many sprites");
         for (const auto &js : jf.at("sprites")) {
@@ -807,6 +909,7 @@ Project load_project(const std::filesystem::path &path) {
             s.flip_y = js.at("flip_y");
             s.behind = js.at("behind");
             s.locked = js.value("locked", false);
+            s.group = checked_int(js.value("group", Json(-1)), -1, 1000000);
             byte_array(js.at("pixels"), 64, 3);
             s.pixels = js.at("pixels").get<Tile>();
             f.sprites.push_back(std::move(s));
@@ -818,14 +921,21 @@ Project load_project(const std::filesystem::path &path) {
             for (const auto &jl : layers) {
                 BackgroundLayer l;
                 l.name = jl.at("name");
-                l.kind = static_cast<LayerKind>(checked_int(jl.at("kind"), 0, 1));
+                l.kind = static_cast<LayerKind>(checked_int(jl.at("kind"), 0, 2));
                 l.visible = jl.at("visible");
                 l.locked = jl.at("locked");
                 l.effects_enabled = jl.value("effects_enabled", true);
                 l.reference_only = jl.value("reference_only", false);
                 l.guide_opacity = checked_int(jl.value("guide_opacity", Json(50)), 0, 100);
-                if (l.kind == LayerKind::Paint)
+                if (l.kind == LayerKind::Paint || l.kind == LayerKind::Tilemap)
                     l.pixels = unhex(jl.at("pixels"), f.pixels.size());
+                if (l.kind == LayerKind::Tilemap) {
+                    if (!jl.at("tile_refs").is_array() ||
+                        jl["tile_refs"].size() != std::size_t(p.width / 8) * (p.height / 8))
+                        throw std::runtime_error("Invalid tile map references");
+                    for (const auto &id : jl["tile_refs"])
+                        l.tile_refs.push_back(checked_int(id, -1, int(p.tiles.size()) - 1));
+                }
                 l.source = read_image(jl.at("source"));
                 l.source_path = jl.value("source_path", "");
                 const auto &jm = jl.at("modifiers");
@@ -1057,6 +1167,10 @@ Project demo_project() {
             sprite("Wingman " + std::to_string(ty * 2 + tx + 1), 37 + tx * 8, 175 + ty * 8, 2,
                    rows);
         }
+    f.groups.push_back({0, 37, 175, "Wingman"});
+    for (auto &s : f.sprites)
+        if (s.name.starts_with("Wingman "))
+            s.group = 0;
     p.sprite_sheet = {int(f.sprites.size()) * 8, 8,
                       std::vector<Byte>(f.sprites.size() * 8 * 8 * 4)};
     for (std::size_t i = 0; i < f.sprites.size(); ++i)
@@ -1096,27 +1210,31 @@ void History::checkpoint(const Project &p) {
     for (auto it = past_.rbegin(); it != past_.rend(); ++it) {
         bytes += it->reference.rgba.size() + it->sprite_sheet.rgba.size();
         bytes += sizeof(BitmapFont) + it->ramps.size() * sizeof(ColorRamp);
+        bytes += it->tiles.size() * sizeof(TileAsset) + it->metatiles.size() * sizeof(Metatile);
         for (const auto &brush : it->brushes)
             bytes += brush.pixels.size() + brush.name.size();
         for (const auto &f : it->frames)
             bytes += f.pixels.size() + f.paint_mask.size() + f.attributes.size() +
-                     f.sprites.size() * sizeof(Sprite);
+                     f.sprites.size() * sizeof(Sprite) + f.groups.size() * sizeof(Metasprite);
         for (const auto &f : it->frames)
             for (const auto &l : f.layers)
-                bytes += l.pixels.size() + l.converted.size() + l.source.rgba.size();
+                bytes += l.pixels.size() + l.converted.size() + l.source.rgba.size() +
+                         l.tile_refs.size() * sizeof(int);
     }
     while (past_.size() > 1 && (past_.size() > 32 || bytes > 64 * 1024 * 1024)) {
         const auto &old = past_.front();
         bytes -= old.reference.rgba.size() + old.sprite_sheet.rgba.size();
         bytes -= sizeof(BitmapFont) + old.ramps.size() * sizeof(ColorRamp);
+        bytes -= old.tiles.size() * sizeof(TileAsset) + old.metatiles.size() * sizeof(Metatile);
         for (const auto &brush : old.brushes)
             bytes -= brush.pixels.size() + brush.name.size();
         for (const auto &f : old.frames)
             bytes -= f.pixels.size() + f.paint_mask.size() + f.attributes.size() +
-                     f.sprites.size() * sizeof(Sprite);
+                     f.sprites.size() * sizeof(Sprite) + f.groups.size() * sizeof(Metasprite);
         for (const auto &f : old.frames)
             for (const auto &l : f.layers)
-                bytes -= l.pixels.size() + l.converted.size() + l.source.rgba.size();
+                bytes -= l.pixels.size() + l.converted.size() + l.source.rgba.size() +
+                         l.tile_refs.size() * sizeof(int);
         past_.erase(past_.begin());
     }
 }

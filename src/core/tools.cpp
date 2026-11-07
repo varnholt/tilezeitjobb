@@ -191,7 +191,7 @@ void flood_fill_sprite(Project &p, std::size_t frame, std::size_t sprite, int x,
         throw std::runtime_error("Invalid NES drawing color");
     auto &f = p.frames.at(frame);
     auto &s = f.sprites.at(sprite);
-    if (!f.sprites_visible || f.sprites_locked || !s.visible || s.locked)
+    if (!p.sprite_visible(frame, s) || p.sprite_locked(frame, s))
         throw std::runtime_error("Show and unlock the sprite before painting");
     if (x < 0 || x >= 8 || y < 0 || y >= 8)
         return;
@@ -222,7 +222,7 @@ void paint_pixels(Project &p, std::size_t frame, const std::vector<PixelPoint> &
     auto &f = p.frames.at(frame);
     if (sprite >= 0) {
         auto &s = f.sprites.at(sprite);
-        if (!f.sprites_visible || f.sprites_locked || !s.visible || s.locked)
+        if (!p.sprite_visible(frame, s) || p.sprite_locked(frame, s))
             throw std::runtime_error("Show and unlock the sprite before painting");
         for (auto [x, y] : points) {
             if (x < 0 || x >= 8 || y < 0 || y >= 8)
@@ -317,7 +317,11 @@ IndexedBrush capture_brush(const Project &project, std::size_t frame, int x, int
     if (w < 1 || h < 1 || w > project.width || h > project.height || x < 0 || y < 0 ||
         x > project.width - w || y > project.height - h)
         throw std::runtime_error("Selection outside the canvas");
-    const auto &source = project.active_pixels(frame);
+    auto composed = project.composed_frame(frame);
+    const auto &source = composed.layers.empty() || composed.active_layer < 0 ? composed.pixels
+                         : composed.layers[composed.active_layer].kind == LayerKind::Image
+                             ? composed.layers[composed.active_layer].converted
+                             : composed.layers[composed.active_layer].pixels;
     IndexedBrush result{w, h, std::vector<Byte>(w * h)};
     for (int row = 0; row < h; ++row)
         std::copy_n(source.begin() + (y + row) * project.width + x, w,
@@ -374,18 +378,67 @@ void stamp_brush(Project &p, std::size_t frame, int x, int y, const IndexedBrush
         }
     p.compose_layers(frame);
 }
-void swap_palette_slots(Project &project, bool sprites, int palette, int a, int b, bool preserve) {
+void swap_palette_slots(Project &input, bool sprites, int palette, int a, int b, bool preserve) {
     if (palette < 0 || palette > 3 || a < 1 || a > 3 || b < 1 || b > 3)
         throw std::runtime_error("Swap nonzero NES slots 1..3; slot 0 is reserved");
     if (a == b)
         return;
+    Project project = input;
     auto &palettes = sprites ? project.sprite_palettes : project.background;
     std::swap(palettes[palette][a], palettes[palette][b]);
-    if (!preserve)
+    if (!preserve) {
+        input = std::move(project);
         return;
+    }
     auto remap = [=](Byte c) {
         return c == a ? static_cast<Byte>(b) : c == b ? static_cast<Byte>(a) : c;
     };
+    if (!sprites) {
+        std::vector<bool> selected(project.tiles.size()), other(project.tiles.size());
+        for (const auto &f : project.frames)
+            for (const auto &layer : f.layers)
+                if (layer.kind == LayerKind::Tilemap)
+                    for (int ty = 0; ty < project.height / 8; ++ty)
+                        for (int tx = 0; tx < project.width / 8; ++tx) {
+                            int id = layer.tile_refs.at(ty * (project.width / 8) + tx);
+                            if (id < 0)
+                                continue;
+                            bool matches =
+                                f.attributes[(ty / 2) * project.block_width() + tx / 2] == palette;
+                            if (matches)
+                                selected.at(id) = true;
+                            else
+                                other.at(id) = true;
+                        }
+        std::map<int, int> forked;
+        for (std::size_t id = 0; id < selected.size(); ++id)
+            if (selected[id]) {
+                if (other[id]) {
+                    if (project.tiles.size() >= 4096)
+                        throw std::runtime_error(
+                            "Palette-preserving remap needs additional tile library space");
+                    auto tile = project.tiles[id];
+                    tile.name = "Remapped tile " + std::to_string(project.tiles.size());
+                    for (auto &pixel : tile.pixels)
+                        pixel = remap(pixel);
+                    forked[int(id)] = int(project.tiles.size());
+                    project.tiles.push_back(std::move(tile));
+                } else
+                    for (auto &pixel : project.tiles[id].pixels)
+                        pixel = remap(pixel);
+            }
+        for (auto &f : project.frames)
+            for (auto &layer : f.layers)
+                if (layer.kind == LayerKind::Tilemap)
+                    for (int ty = 0; ty < project.height / 8; ++ty)
+                        for (int tx = 0; tx < project.width / 8; ++tx) {
+                            auto &id = layer.tile_refs[ty * (project.width / 8) + tx];
+                            auto found = forked.find(id);
+                            if (found != forked.end() &&
+                                f.attributes[(ty / 2) * project.block_width() + tx / 2] == palette)
+                                id = found->second;
+                        }
+    }
     for (auto &f : project.frames) {
         if (sprites) {
             for (auto &sprite : f.sprites)
@@ -408,5 +461,6 @@ void swap_palette_slots(Project &project, bool sprites, int palette, int a, int 
     if (!sprites)
         for (std::size_t i = 0; i < project.frames.size(); ++i)
             project.compose_layers(i);
+    input = std::move(project);
 }
 } // namespace tzj

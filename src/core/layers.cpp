@@ -8,7 +8,7 @@ bool BackgroundLayer::operator==(const BackgroundLayer &o) const {
     return name == o.name && kind == o.kind && visible == o.visible && locked == o.locked &&
            effects_enabled == o.effects_enabled && reference_only == o.reference_only &&
            guide_opacity == o.guide_opacity && pixels == o.pixels && source == o.source &&
-           source_path == o.source_path && modifiers == o.modifiers;
+           source_path == o.source_path && modifiers == o.modifiers && tile_refs == o.tile_refs;
 }
 namespace {
 Color source_pixel(const BackgroundLayer &layer, int x, int y) {
@@ -179,6 +179,21 @@ void compose(const Project &p, Frame &f, bool force) {
     for (auto &layer : f.layers) {
         if (layer.kind == LayerKind::Image)
             convert(p, f, layer, force);
+        if (layer.kind == LayerKind::Tilemap) {
+            if (layer.tile_refs.size() != std::size_t(p.width / 8) * (p.height / 8))
+                throw std::runtime_error("Invalid tile map dimensions");
+            layer.pixels.assign(f.pixels.size(), 255);
+            for (int ty = 0; ty < p.height / 8; ++ty)
+                for (int tx = 0; tx < p.width / 8; ++tx) {
+                    int id = layer.tile_refs[ty * (p.width / 8) + tx];
+                    if (id < 0)
+                        continue;
+                    const auto &tile = p.tiles.at(std::size_t(id)).pixels;
+                    for (int y = 0; y < 8; ++y)
+                        for (int x = 0; x < 8; ++x)
+                            layer.pixels[(ty * 8 + y) * p.width + tx * 8 + x] = tile[y * 8 + x];
+                }
+        }
         if (!f.background_visible || !layer.visible || layer.reference_only)
             continue;
         const auto &pixels = layer.kind == LayerKind::Image ? layer.converted : layer.pixels;
@@ -237,7 +252,7 @@ bool Project::paint_layer_editable(std::size_t frame) const {
         f.active_layer >= int(f.layers.size()))
         return false;
     const auto &l = f.layers[f.active_layer];
-    return l.kind == LayerKind::Paint && l.visible && !l.locked;
+    return l.kind != LayerKind::Image && l.visible && !l.locked;
 }
 const std::vector<Byte> &Project::active_pixels(std::size_t frame) const {
     const auto &f = frames.at(frame);
@@ -259,8 +274,27 @@ void Project::write_background_pixel(std::size_t frame, std::size_t position, By
         if (f.paint_mask.empty())
             f.paint_mask.assign(f.pixels.size(), 255);
         f.paint_mask.at(position) = f.pixels[position];
-    } else
-        f.layers.at(f.active_layer).pixels.at(position) = color;
+    } else {
+        auto &l = f.layers.at(f.active_layer);
+        if (position >= std::size_t(width) * height)
+            throw std::runtime_error("Pixel outside the map");
+        if (l.kind == LayerKind::Tilemap) {
+            int x = int(position % width), y = int(position / width);
+            int &id = l.tile_refs.at((y / 8) * (width / 8) + x / 8);
+            if (id < 0) {
+                if (color == 255)
+                    return;
+                if (tiles.size() >= 4096)
+                    throw std::runtime_error("Tile library is full");
+                Tile tile;
+                tile.fill(255);
+                id = int(tiles.size());
+                tiles.push_back({"Tile " + std::to_string(id), tile});
+            }
+            tiles.at(id).pixels[(y % 8) * 8 + x % 8] = color;
+        }
+        l.pixels.at(position) = color;
+    }
     if (palette >= 0) {
         int x = int(position % width), y = int(position / width);
         f.attributes[(y / 16) * block_width() + x / 16] = Byte(palette);
@@ -293,6 +327,14 @@ std::size_t Project::add_image_layer(std::size_t frame, Image source, std::strin
     compose_layers(frame, true);
     return i;
 }
+std::size_t Project::add_tilemap_layer(std::size_t frame, std::string name) {
+    auto index = add_paint_layer(frame, std::move(name));
+    auto &l = frames[frame].layers[index];
+    l.kind = LayerKind::Tilemap;
+    l.tile_refs.assign(std::size_t(width / 8) * (height / 8), -1);
+    compose_layers(frame);
+    return index;
+}
 std::size_t Project::duplicate_layer(std::size_t frame, std::size_t index, bool paintable) {
     ensure_layers(frame);
     auto &f = frames.at(frame);
@@ -303,10 +345,12 @@ std::size_t Project::duplicate_layer(std::size_t frame, std::size_t index, bool 
     copy.name += paintable ? " - paint copy" : " copy";
     copy.visible = true;
     copy.locked = false;
-    if (paintable && copy.kind == LayerKind::Image) {
+    if (paintable && copy.kind != LayerKind::Paint) {
         copy.reference_only = false;
+        auto pixels = copy.kind == LayerKind::Image ? copy.converted : copy.pixels;
         copy.kind = LayerKind::Paint;
-        copy.pixels = copy.converted;
+        copy.pixels = std::move(pixels);
+        copy.tile_refs.clear();
         copy.source = {};
         copy.source_path.clear();
         copy.converted.clear();
@@ -369,7 +413,10 @@ void Project::clear_active_layer(std::size_t frame) {
     if (f.layers.empty()) {
         f.paint_mask.clear();
         std::fill(f.pixels.begin(), f.pixels.end(), Byte(0));
-    } else
+    } else if (f.layers.at(f.active_layer).kind == LayerKind::Tilemap)
+        std::fill(f.layers.at(f.active_layer).tile_refs.begin(),
+                  f.layers.at(f.active_layer).tile_refs.end(), -1);
+    else
         std::fill(f.layers.at(f.active_layer).pixels.begin(),
                   f.layers.at(f.active_layer).pixels.end(), Byte(255));
     compose_layers(frame);

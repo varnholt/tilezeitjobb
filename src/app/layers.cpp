@@ -85,7 +85,11 @@ bool Editor::target_editable(bool warn) {
     bool editable = project.paint_layer_editable(frame_);
     if (layer_ >= 0 && layer_ < int(f.sprites.size())) {
         const auto &s = f.sprites[layer_];
-        editable = f.sprites_visible && !f.sprites_locked && s.visible && !s.locked;
+        editable = project.sprite_visible(frame_, s) && !project.sprite_locked(frame_, s);
+        if (selected_group())
+            for (const auto &member : f.sprites)
+                if (member.group == group_ && project.sprite_locked(frame_, member))
+                    editable = false;
     }
     if (!editable && warn)
         status_ = layer_ >= 0 ? "Show and unlock the selected sprite before editing."
@@ -94,13 +98,18 @@ bool Editor::target_editable(bool warn) {
     return editable;
 }
 void Editor::layer_action(int action, int index, bool sprite) {
+    if (sprite && selected_group() && (action == 0 || action == 2)) {
+        group_action(action == 0 ? 3 : 4);
+        return;
+    }
     try {
         cancel_drawing();
         auto &f = project.frames[frame_];
         if (sprite) {
             if (index < 0 || index >= int(f.sprites.size()))
                 return;
-            if (f.sprites_locked || (f.sprites[index].locked && action != 0)) {
+            if (f.sprites_locked ||
+                (project.sprite_locked(frame_, f.sprites[index]) && action != 0)) {
                 status_ = "Unlock the sprite before changing it.";
                 return;
             }
@@ -177,26 +186,40 @@ void Editor::layer_stack() {
                   sprite ? &f.sprites[index] : nullptr);
         ImGui::SameLine(0, 5);
         const auto &name = sprite ? f.sprites[index].name : f.layers[index].name;
-        const bool selected = sprite ? layer_ == index : layer_ < 0 && f.active_layer == index;
+        const bool selected =
+            sprite ? (!selected_group() &&
+                      (layer_ == index ||
+                       std::ranges::find(selected_sprites_, index) != selected_sprites_.end()))
+                   : layer_ < 0 && f.active_layer == index;
         auto pos = ImGui::GetCursorScreenPos();
         bool picked = ui::Selectable((name + "##layer-row").c_str(), selected, 0,
                                      {ImGui::GetContentRegionAvail().x, 36});
         auto *d = ImGui::GetWindowDrawList();
         const char *type =
             sprite ? (f.sprites[index].behind ? "Sprite / behind background" : "Sprite object")
-            : f.layers[index].reference_only           ? "Reference / not exported"
-            : f.layers[index].kind == LayerKind::Image ? "Image / live modifiers"
-                                                       : "Paint / indexed pixels";
+            : f.layers[index].reference_only             ? "Reference / not exported"
+            : f.layers[index].kind == LayerKind::Image   ? "Image / live modifiers"
+            : f.layers[index].kind == LayerKind::Tilemap ? "Tile map / shared tiles"
+                                                         : "Paint / indexed pixels";
         d->AddText(nullptr, 12, {pos.x, pos.y + 20}, IM_COL32(140, 157, 172, 255), type);
         if (picked) {
             cancel_drawing();
             custom_symmetry_ = false;
             if (sprite) {
+                group_ = -1;
+                if (!ImGui::GetIO().KeyShift)
+                    selected_sprites_.clear();
+                if (std::ranges::find(selected_sprites_, index) == selected_sprites_.end())
+                    selected_sprites_.push_back(index);
+                else if (ImGui::GetIO().KeyShift)
+                    std::erase(selected_sprites_, index);
                 layer_ = index;
                 palette_group_ = 1;
                 palette_ = f.sprites[index].palette;
                 tool_ = Tool::Pencil;
             } else {
+                group_ = -1;
+                selected_sprites_.clear();
                 layer_ = -1;
                 f.active_layer = index;
                 palette_group_ = 0;
@@ -225,7 +248,7 @@ void Editor::layer_stack() {
                 action_index = index;
                 action_sprite = sprite;
             }
-            if (!sprite && f.layers[index].kind == LayerKind::Image &&
+            if (!sprite && f.layers[index].kind != LayerKind::Paint &&
                 ui::MenuItem("Make paintable copy")) {
                 action = 1;
                 action_index = index;
@@ -269,14 +292,57 @@ void Editor::layer_stack() {
         changed();
     }
     ImGui::SameLine(0, 5);
-    bool sprites_open =
-        ImGui::TreeNodeEx("sprite-group",
-                          (f.sprites.size() <= 4 ? ImGuiTreeNodeFlags_DefaultOpen : 0) |
-                              ImGuiTreeNodeFlags_SpanAvailWidth,
-                          "Sprites (%zu)", f.sprites.size());
+    bool sprites_open = ImGui::TreeNodeEx(
+        "sprite-group",
+        (f.sprites.size() <= 4 || selected_group() ? ImGuiTreeNodeFlags_DefaultOpen : 0) |
+            ImGuiTreeNodeFlags_SpanAvailWidth,
+        "Sprites (%zu)", f.sprites.size());
     if (sprites_open) {
+        for (auto &g : f.groups) {
+            ImGui::PushID(g.id + 100000);
+            if (layer_switch("##eye", g.visible, false)) {
+                checkpoint();
+                g.visible = !g.visible;
+                changed();
+            }
+            ImGui::SameLine(0, 2);
+            if (layer_switch("##lock", g.locked, true)) {
+                checkpoint();
+                g.locked = !g.locked;
+                changed();
+            }
+            ImGui::SameLine(0, 5);
+            bool opened = ImGui::TreeNodeEx(
+                g.name.c_str(),
+                ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth |
+                    (selected_group() && group_ == g.id ? ImGuiTreeNodeFlags_Selected : 0));
+            ui::help("Metasprite",
+                     "Select the character to draw and move all its tiles together. Expand to edit "
+                     "individual tiles. Shift-click individual rows to group sprites with Ctrl+G.");
+            if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+                cancel_drawing();
+                group_ = g.id;
+                selected_sprites_.clear();
+                custom_symmetry_ = false;
+                auto it = std::ranges::find(f.sprites, g.id, &Sprite::group);
+                if (it != f.sprites.end()) {
+                    layer_ = int(it - f.sprites.begin());
+                    palette_group_ = 1;
+                    palette_ = it->palette;
+                    tool_ = Tool::Pencil;
+                }
+            }
+            if (opened) {
+                for (int i = 0; i < int(f.sprites.size()); ++i)
+                    if (f.sprites[i].group == g.id)
+                        row(i, true);
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        }
         for (int i = 0; i < int(f.sprites.size()); ++i)
-            row(i, true);
+            if (f.sprites[i].group < 0)
+                row(i, true);
         ImGui::TreePop();
     }
     ImGui::PopID();
@@ -310,7 +376,7 @@ void Editor::layer_stack() {
             if (from.kind == 0) {
                 project.move_layer(frame_, from.index, to.index);
                 layer_ = -1;
-            } else if (!f.sprites_locked && !f.sprites[from.index].locked) {
+            } else if (!project.sprite_locked(frame_, f.sprites[from.index])) {
                 auto s = std::move(f.sprites[from.index]);
                 f.sprites.erase(f.sprites.begin() + from.index);
                 f.sprites.insert(f.sprites.begin() + to.index, std::move(s));
@@ -452,7 +518,10 @@ void Editor::layer_properties() {
         ImGui::EndDisabled();
 
     } else {
-        ui::TextDisabled("Paint / transparent pixels");
+        ui::TextDisabled(l.kind == LayerKind::Tilemap ? "Tile map / linked instances"
+                                                      : "Paint / transparent pixels");
+        if (l.kind == LayerKind::Tilemap && ui::Button("Open tile map library"))
+            show_tilemap_ = true;
         ui::help("Paint / transparent pixels",
                  "Paint on the selected layer. Erasing reveals layers below. Layer operations are "
                  "in the Layers menu or the row's context menu.");

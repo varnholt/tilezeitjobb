@@ -34,7 +34,24 @@ void save_png(const std::filesystem::path &, const Image &);
 std::vector<Byte> encode_png(const Image &);
 Byte nearest_nes(Color);
 Byte nearest_slot(Color, const Palette &, int x, int y, bool dither, bool transparent = false);
-enum class LayerKind { Paint, Image };
+enum class LayerKind { Paint, Image, Tilemap };
+struct TileAsset {
+    std::string name{"Tile"};
+    Tile pixels{};
+    bool operator==(const TileAsset &) const = default;
+};
+struct Metatile {
+    std::string name{"Metatile"};
+    std::array<int, 4> tiles{-1, -1, -1, -1};
+    int palette{};
+    bool operator==(const Metatile &) const = default;
+};
+struct Metasprite {
+    int id{}, origin_x{}, origin_y{};
+    std::string name{"Metasprite"};
+    bool visible{true}, locked{};
+    bool operator==(const Metasprite &) const = default;
+};
 enum class DitherMode { None, Bayer2, Bayer4, Bayer8, FloydSteinberg, Atkinson };
 struct ImageModifiers {
     bool transform_enabled{true}, color_enabled{true}, dither_enabled{true};
@@ -70,6 +87,7 @@ struct BackgroundLayer {
     int guide_opacity{50};
     // Paint pixels: 0..3 are opaque NES slots, 255 is transparent.
     std::vector<Byte> pixels;
+    std::vector<int> tile_refs; // Tilemap cells in row-major 8x8 units; -1 is empty.
     Image source;
     std::string source_path;
     ImageModifiers modifiers;
@@ -83,6 +101,7 @@ struct Sprite {
     int x{}, y{1}, palette{}, tile_x{}, tile_y{};
     bool visible{true}, flip_x{}, flip_y{}, behind{}, locked{};
     Tile pixels{};
+    int group{-1};
     bool operator==(const Sprite &) const = default;
 };
 struct Frame {
@@ -93,6 +112,7 @@ struct Frame {
     std::vector<BackgroundLayer> layers; // Bottom to top; sprite objects stay above this group.
     int active_layer{-1};
     bool background_visible{true}, background_locked{}, sprites_visible{true}, sprites_locked{};
+    std::vector<Metasprite> groups;
     bool operator==(const Frame &) const = default;
 };
 struct Project {
@@ -107,6 +127,8 @@ struct Project {
     std::vector<Frame> frames;
     std::vector<SavedBrush> brushes;
     std::vector<ColorRamp> ramps;
+    std::vector<TileAsset> tiles;
+    std::vector<Metatile> metatiles;
     BitmapFont font{default_bitmap_font()};
     Project();
     int block_width() const { return width / 16; }
@@ -135,6 +157,9 @@ struct Project {
     void write_background_pixel(std::size_t frame, std::size_t position, Byte color,
                                 int palette = -1);
     void clear_active_layer(std::size_t frame);
+    bool sprite_visible(std::size_t frame, const Sprite &) const;
+    bool sprite_locked(std::size_t frame, const Sprite &) const;
+    std::size_t add_tilemap_layer(std::size_t frame, std::string name = "Tile map");
     bool operator==(const Project &) const = default;
 };
 void paint_line(Project &, std::size_t frame, int x0, int y0, int x1, int y1, Byte color, int size,

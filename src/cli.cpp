@@ -10,7 +10,8 @@ static void help() {
     std::cout
         << "tilezeitjobb-cli\n  demo PREFIX\n  compile PROJECT.tzj PREFIX [--frame N]\n  import "
            "IMAGE PROJECT.tzj [--auto-palettes] [--layout horizontal|vertical]\n  inspect "
-           "PROJECT.tzj\n  batch INPUT_DIR OUTPUT_DIR [--crop X Y WIDTH HEIGHT] [--palette "
+           "PROJECT.tzj\n  animate PROJECT.tzj PREFIX\n  spritesheet PROJECT.tzj PREFIX [--columns "
+           "N]\n  batch INPUT_DIR OUTPUT_DIR [--crop X Y WIDTH HEIGHT] [--palette "
            "FILE.pal]\nFrame numbers are zero based; crop coordinates and size are in 8x8 tiles.\n";
 }
 static int integer(const char *value) {
@@ -49,6 +50,24 @@ int main(int argc, char **argv) {
             std::cout << "Exported NROM-128: " << scene.background_tiles << " background tiles, "
                       << scene.sprite_tiles << " sprite tiles, " << scene.sprite_count
                       << " sprites.\n";
+            return 0;
+        }
+        if (command == "animate" && argc == 4) {
+            auto p = load_project(argv[2]);
+            export_animation(argv[3], p);
+            std::cout << "Exported looping NROM animation with " << p.frames.size()
+                      << " frame(s).\n";
+            return 0;
+        }
+        if (command == "spritesheet" && (argc == 4 || argc == 6)) {
+            int columns = 8;
+            if (argc == 6) {
+                if (std::string(argv[4]) != "--columns")
+                    throw std::runtime_error("Expected --columns N");
+                columns = integer(argv[5]);
+            }
+            export_sprite_sheet(argv[3], load_project(argv[2]), columns);
+            std::cout << "Exported transparent PNG sprite sheet and JSON metadata.\n";
             return 0;
         }
         if (command == "import" && argc >= 4) {

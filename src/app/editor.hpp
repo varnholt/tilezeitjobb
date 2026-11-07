@@ -52,6 +52,7 @@ class Editor {
     enum class Workspace { Draw, Tiles, Sprites, Animate, Export };
     bool show_tiles_{}, show_timeline_{}, show_hardware_{};
     bool show_emulator_{}, emulator_running_{}, emulator_auto_{true};
+    bool emulator_animation_{};
     std::unique_ptr<emu::Nes> emulator_;
     unsigned int emulator_texture_{};
     std::vector<Byte> emulator_rom_;
@@ -106,9 +107,40 @@ class Editor {
         Export,
         Png,
         Brushes,
-        FontSheet
+        FontSheet,
+        AnimatedRom,
+        SpriteSheet
     };
     bool show_brush_library_{}, show_bitmap_text_{}, show_gradients_{}, show_onion_settings_{};
+    bool show_shortcuts_{};
+    std::optional<NesIssue> focused_issue_;
+    int group_{-1};
+    std::vector<int> selected_sprites_;
+    const Metasprite *selected_group() const;
+    PixelRect target_bounds() const;
+    void group_action(int action);
+    void group_properties();
+    bool show_tilemap_{};
+    int map_tile_{-1}, map_metatile_{-1};
+    bool map_use_metatile_{};
+    void tilemap_window();
+    struct FloatingSelection {
+        PixelRect source;
+        IndexedBrush brush;
+        int x{}, y{};
+        bool copy{}, dragging{}, resizing{};
+        IndexedBrush unscaled;
+    };
+    std::optional<FloatingSelection> floating_;
+    std::optional<Project> selection_preview_;
+    void begin_selection_transform(bool copy = false);
+    void update_selection_preview();
+    void commit_selection();
+    void selection_window();
+    bool pixel_perfect_{};
+    std::optional<Frame> pencil_before_;
+    std::vector<TileAsset> pencil_tiles_;
+    std::vector<PixelPoint> pencil_path_;
     int library_selection_{-1}, glyph_{'A'}, text_spacing_{}, text_line_gap_{}, text_scale_{1};
     char asset_name_[129]{"New brush"}, ramp_name_[129]{"New color ramp"}, text_[1025]{"PLAYER 1"};
     bool text_recolor_{true}, glyph_stroke_{}, gradient_vertical_{true};

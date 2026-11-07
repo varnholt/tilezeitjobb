@@ -205,7 +205,7 @@ Image onion_overlay(const Project &p, std::size_t frame, int previous, int follo
             const auto &f = p.frames[target];
             if (sprites_only && f.sprites_visible)
                 for (const auto &s : f.sprites)
-                    if (s.visible)
+                    if (p.sprite_visible(std::size_t(target), s))
                         for (int sy = 0; sy < 8; ++sy)
                             for (int sx = 0; sx < 8; ++sx) {
                                 int x = s.x + sx, y = s.y + sy;
